@@ -202,7 +202,7 @@ calling an unavailable host capability returns an error. Rust Cargo dependencies
 are configured separately. The `network` module includes `INTERNET`; other
 permissions remain explicit in `permissions`. Its Android verifier version is
 resolved from the application's Cargo dependencies during the Gradle build.
-See [HTTPS setup](../../../crates/gpui_android/docs/hosting.md#https).
+See [HTTPS setup](https://github.com/cradiy/gpui-fusion/blob/main/crates/gpui_android/docs/hosting.md#https).
 
 To allow HTTP through Android networking components, set `cleartext-traffic`:
 
@@ -275,7 +275,7 @@ The Rust application decides which content needs padding, using
 
 Set `"inset-handling": "host"` for automatic avoidance. System bars remain
 visible in both modes. Run `gpuiforge sync android` after changing this setting.
-The [Android hosting guide](../../../crates/gpui_android/docs/hosting.md#safe-areas-and-the-keyboard)
+The [Android hosting guide](https://github.com/cradiy/gpui-fusion/blob/main/crates/gpui_android/docs/hosting.md#safe-areas-and-the-keyboard)
 shows Rust layout code and the equivalent custom Activity configuration.
 
 ## Recipes and templates

@@ -10,9 +10,13 @@ Android SDK/NDK and the required Rust Android targets installed.
 Install from the repository root:
 
 ```sh
-cargo install --path tools/gpuiforge
+cargo install --path .
 ```
 
 Android projects can be generated automatically or exported for manual
 maintenance. Desktop and Web commands are configured as process steps.
 See [configuration and workflows](docs/usage.md) for setup and project ownership.
+
+## License
+
+MIT License. Copyright (c) 2026 cradiy. See [LICENSE](LICENSE).
