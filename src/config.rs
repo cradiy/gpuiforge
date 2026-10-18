@@ -1,3 +1,4 @@
+use crate::build_options::{AndroidBuildType, BuildOptions, SigningMode};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::{
@@ -85,6 +86,12 @@ pub struct Platform {
     pub run: Vec<Step>,
     /// Expected build output path relative to project-dir, with {{variables}} supported. When present, build fails if the file does not exist afterward. Android run exposes its absolute path as {{artifact}}. Bundled default: app/build/outputs/apk/{{profile}}/app-{{profile}}{{apk_suffix}}.apk.
     pub artifact: Option<String>,
+    /// Default Cargo profile, shared by build and run. Defaults to dev. Use release or an application-defined profile for optimized builds. Profile settings come from the application workspace Cargo.toml. --rust-profile overrides this field; --release selects release unless --rust-profile is explicit.
+    pub rust_profile: Option<String>,
+    /// Default Android build type: debug or release. Defaults to debug, independently of rust-profile. --android-build-type overrides this field; --release selects release unless explicitly overridden. Does not select the signing key.
+    pub build_type: Option<AndroidBuildType>,
+    /// Android signing policy: auto, debug, configured or unsigned. Auto uses the development key for debug; release uses the signing object when present, otherwise remains unsigned. Debug also signs release builds with Android's development key without requiring password variables. Configured requires signing credentials and never falls back. --signing overrides this field. Unsigned APKs cannot be installed by run.
+    pub signing_mode: Option<SigningMode>,
     /// Android package identity, such as com.example.app. Required directly or through a recipe. Use at least two dot-separated segments starting with ASCII letters; remaining characters may be letters, digits or underscores. This is independent of the Kotlin host namespace and Rust package name.
     pub application_id: Option<String>,
     /// Who applies safe-area and keyboard avoidance in the bundled Android Activity. Defaults to application: the GPUI viewport fills the window and Window::insets() reports occlusion in logical pixels without consumed padding. Use host for automatic avoidance; Rust can use insets.effective() in either mode without double padding. This does not hide system bars. Regenerate managed Android sources with gpuiforge sync after changing it.
@@ -108,7 +115,7 @@ pub struct Platform {
     /// MIME types accepted from Android SEND and SEND_MULTIPLE intents, for example text/plain, image/* or */*. Defaults to empty, which does not register a share target. Use lowercase type/subtype syntax. The bundled host requires the sharing feature; the application handles received content itself.
     #[serde(default)]
     pub share_mime_types: Vec<String>,
-    /// Optional Android release signing configuration. All four fields are required when present. Passwords come from environment variables during --release builds; debug builds use the development key. Without this object, the bundled release build produces an unsigned APK. Store the keystore outside the generated project.
+    /// Optional Android release signing configuration. All four fields are required when present. Passwords come from environment variables only when configured signing is selected. With signing-mode auto, debug uses the development key and release uses these credentials. Without this object, auto release builds remain unsigned; signing-mode debug explicitly enables development signing for release. Store the keystore outside the generated project.
     pub signing: Option<Signing>,
 }
 
@@ -155,7 +162,7 @@ pub struct Signing {
     pub keystore: PathBuf,
     /// Alias of the signing key inside the keystore, not the keystore filename. Must be nonempty and match the alias used when the key was created.
     pub key_alias: String,
-    /// Name of the environment variable containing the keystore password, not the password itself. It must be set to a nonempty value for release builds. Example: ANDROID_STORE_PASSWORD.
+    /// Name of the environment variable containing the keystore password, not the password itself. It must be set to a nonempty value when configured signing is selected. Example: ANDROID_STORE_PASSWORD.
     pub store_password_env: String,
     /// Name of the environment variable containing the private signing key's password. It may name the same variable as store-password-env when both passwords are identical. Example: ANDROID_KEY_PASSWORD.
     pub key_password_env: String,
@@ -175,7 +182,7 @@ pub struct CopySpec {
 pub struct Step {
     /// Executable name resolved through PATH, or an explicit executable path. Supports {{variables}}. GPUiForge starts it directly without a shell; use an explicit shell program when shell syntax is required.
     pub program: String,
-    /// Arguments passed individually to the executable, in order. Defaults to empty. Spaces do not split an argument; shell quoting, pipes, globbing and $VAR expansion are not performed by GPUiForge. Common placeholders: {{cargo_profile}} (dev/release), {{profile}} (debug/release), {{variant}} (Debug/Release), {{project_dir}} and {{abis}}. Android run steps also receive {{adb}}, {{device}} and {{artifact}}. Custom values use {{var.<name>}} or {{path.<name>}}.
+    /// Arguments passed individually to the executable, in order. Defaults to empty. Spaces do not split an argument; shell quoting, pipes, globbing and $VAR expansion are not performed by GPUiForge. Common placeholders: {{cargo_profile}} (resolved Cargo profile), {{profile}} (debug/release), {{variant}} (Debug/Release), {{signing_mode}} (resolved Android signing policy), {{project_dir}} and {{abis}}. Android run steps also receive {{adb}}, {{device}} and {{artifact}}. Custom values use {{var.<name>}} or {{path.<name>}}.
     #[serde(default)]
     pub args: Vec<String>,
     /// Working directory for this step. Defaults to the application configuration directory. Relative paths also resolve from that directory, including steps inherited from a recipe. Supports {{variables}}; use {{project_dir}} for Gradle commands in the native project.
@@ -504,10 +511,15 @@ impl Project {
                         && platform.cleartext_domains.is_empty()
                         && platform.inset_handling.is_none()
                         && platform.signing.is_none()
+                        && platform.build_type.is_none()
+                        && platform.signing_mode.is_none()
                         && platform.url_schemes.is_empty()
                         && platform.share_mime_types.is_empty(),
                     "features, icons, cleartext settings, inset-handling, permissions, signing, url-schemes and share-mime-types are Android-only settings"
                 );
+            }
+            if let Some(profile) = &platform.rust_profile {
+                crate::build_options::validate_rust_profile(profile)?;
             }
             platforms.insert(name, platform);
         }
@@ -536,8 +548,14 @@ impl Project {
         ))
     }
 
-    pub fn variables(&self, name: &str, release: bool, abi: Option<&str>) -> Result<Variables> {
+    pub fn variables(
+        &self,
+        name: &str,
+        options: &BuildOptions,
+        abi: Option<&str>,
+    ) -> Result<Variables> {
         let p = self.platform(name)?;
+        let selection = options.resolve(name, p)?;
         let mut vars = BTreeMap::from([
             ("app.name".into(), self.name.clone()),
             ("app_dir".into(), self.root.display().to_string()),
@@ -551,17 +569,11 @@ impl Project {
                 "project_dir".into(),
                 self.directory(name)?.display().to_string(),
             ),
-            (
-                "profile".into(),
-                if release { "release" } else { "debug" }.into(),
-            ),
-            (
-                "cargo_profile".into(),
-                if release { "release" } else { "dev" }.into(),
-            ),
+            ("profile".into(), selection.android_build_type.name().into()),
+            ("cargo_profile".into(), selection.rust_profile),
             (
                 "apk_suffix".into(),
-                if release && p.signing.is_none() {
+                if selection.signing == SigningMode::Unsigned {
                     "-unsigned"
                 } else {
                     ""
@@ -570,8 +582,9 @@ impl Project {
             ),
             (
                 "variant".into(),
-                if release { "Release" } else { "Debug" }.into(),
+                selection.android_build_type.variant().into(),
             ),
+            ("signing_mode".into(), selection.signing.name().into()),
             (
                 "abis".into(),
                 abi.map(str::to_owned).unwrap_or_else(|| p.abis.join(",")),

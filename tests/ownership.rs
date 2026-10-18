@@ -674,3 +674,88 @@ esac
         assert_eq!(calls.contains(" install -r "), succeeds);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn build_selection_reaches_commands_and_rejects_missing_signing_credentials() {
+    let app = Fixture::new();
+    let config_path = app.0.join("gpuiforge.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    config["platforms"]["android"]["build"] = serde_json::json!([{
+        "program": "sh",
+        "args": [
+            "-c",
+            "printf '%s\\n' \"$@\" \"$GPUIFORGE_RUST_PROFILE\" \"$GPUIFORGE_SIGNING_MODE\" \"$GPUIFORGE_SIGNING_ENABLED\" > selection.txt",
+            "probe",
+            "{{cargo_profile}}", "{{profile}}", "{{variant}}", "{{signing_mode}}", "{{apk_suffix}}"
+        ]
+    }]);
+    fs::write(&config_path, config.to_string()).unwrap();
+    let trace = app.0.join("selection.txt");
+    for (options, expected) in [
+        (vec![], "dev\ndebug\nDebug\ndebug\n\ndev\ndebug\n0\n"),
+        (
+            vec!["--rust-profile", "release"],
+            "release\ndebug\nDebug\ndebug\n\nrelease\ndebug\n0\n",
+        ),
+        (
+            vec!["--release", "--signing", "debug"],
+            "release\nrelease\nRelease\ndebug\n\nrelease\ndebug\n0\n",
+        ),
+        (
+            vec!["--release"],
+            "release\nrelease\nRelease\nunsigned\n-unsigned\nrelease\nunsigned\n0\n",
+        ),
+        (
+            vec![
+                "--release",
+                "--rust-profile",
+                "inspect-fast",
+                "--android-build-type",
+                "debug",
+            ],
+            "inspect-fast\ndebug\nDebug\ndebug\n\ninspect-fast\ndebug\n0\n",
+        ),
+    ] {
+        let mut args = vec!["build", "android"];
+        args.extend(options);
+        app.ok(&args);
+        assert_eq!(fs::read_to_string(&trace).unwrap(), expected);
+    }
+    config["platforms"]["android"]["rust-profile"] = "inspect-fast".into();
+    config["platforms"]["android"]["build-type"] = "release".into();
+    config["platforms"]["android"]["signing-mode"] = "debug".into();
+    config["platforms"]["android"]["signing"] = serde_json::json!({
+        "keystore": "not-created.jks",
+        "key-alias": "distribution",
+        "store-password-env": "FORGE_TEST_STORE_PASSWORD",
+        "key-password-env": "FORGE_TEST_KEY_PASSWORD"
+    });
+    fs::write(&config_path, config.to_string()).unwrap();
+    app.ok(&["build", "android"]);
+    assert_eq!(
+        fs::read_to_string(&trace).unwrap(),
+        "inspect-fast\nrelease\nRelease\ndebug\n\ninspect-fast\ndebug\n0\n"
+    );
+    app.ok(&["build", "android", "--release"]);
+    assert!(
+        fs::read_to_string(&trace)
+            .unwrap()
+            .starts_with("release\nrelease\n")
+    );
+    for args in [
+        vec!["build", "android", "--signing", "configured"],
+        vec!["run", "android", "--signing", "unsigned"],
+        vec!["build", "android", "--rust-profile", "../invalid"],
+    ] {
+        fs::remove_file(&trace).unwrap();
+        let result = app.run(&args);
+        assert!(!result.status.success(), "{args:?}");
+        assert!(
+            !trace.exists(),
+            "invalid options must not execute build steps"
+        );
+        fs::write(&trace, "").unwrap();
+    }
+}

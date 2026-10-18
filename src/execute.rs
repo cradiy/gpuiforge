@@ -1,4 +1,5 @@
 use crate::{
+    build_options::{BuildOptions, SigningMode},
     config::{Management, Project, Step, Variables, expand},
     generate,
 };
@@ -113,12 +114,36 @@ fn steps_with_env(
     Ok(())
 }
 
-pub fn build(project: &Project, name: &str, release: bool, abi: Option<&str>) -> Result<Variables> {
+pub fn build(
+    project: &Project,
+    name: &str,
+    options: &BuildOptions,
+    abi: Option<&str>,
+) -> Result<Variables> {
     let platform = project.platform(name)?;
+    let selection = options.resolve(name, platform)?;
     let mut signing_env = std::collections::BTreeMap::new();
     if name == "android" {
+        eprintln!(
+            "Build: Rust {}, Android {}, signing {}",
+            selection.rust_profile,
+            selection.android_build_type.name(),
+            selection.signing.name()
+        );
+        signing_env.insert(
+            "GPUIFORGE_RUST_PROFILE".into(),
+            selection.rust_profile.clone().into(),
+        );
+        signing_env.insert(
+            "GPUIFORGE_SIGNING_MODE".into(),
+            selection.signing.name().into(),
+        );
         signing_env.insert("GPUIFORGE_SIGNING_ENABLED".into(), "0".into());
-        if release && let Some(signing) = &platform.signing {
+        if selection.signing == SigningMode::Configured {
+            let signing = platform
+                .signing
+                .as_ref()
+                .context("signing configuration missing")?;
             let keystore = crate::host::canonicalize(&signing.keystore)
                 .context("signing keystore not found")?;
             ensure!(keystore.is_file(), "signing keystore must be a file");
@@ -177,7 +202,7 @@ pub fn build(project: &Project, name: &str, release: bool, abi: Option<&str>) ->
             "manual project directory is missing"
         );
     }
-    let vars = project.variables(name, release, abi)?;
+    let vars = project.variables(name, options, abi)?;
     steps_with_env(project, &platform.build, &vars, &signing_env)?;
     if let Some(artifact) = &platform.artifact {
         let artifact = project.directory(name)?.join(expand(artifact, &vars)?);
@@ -191,7 +216,12 @@ pub fn build(project: &Project, name: &str, release: bool, abi: Option<&str>) ->
     Ok(vars)
 }
 
-pub fn run(project: &Project, name: &str, release: bool, device: Option<&str>) -> Result<()> {
+pub fn run(
+    project: &Project,
+    name: &str,
+    options: &BuildOptions,
+    device: Option<&str>,
+) -> Result<()> {
     let platform = project.platform(name)?;
     if name != "android" {
         ensure!(device.is_none(), "--device is only valid for Android");
@@ -199,15 +229,19 @@ pub fn run(project: &Project, name: &str, release: bool, device: Option<&str>) -
             !platform.run.is_empty(),
             "no run steps configured for {name}"
         );
-        let vars = project.variables(name, release, None)?;
+        let vars = project.variables(name, options, None)?;
         return steps(project, &platform.run, &vars);
     }
     ensure!(
         !platform.run.is_empty(),
         "no run steps configured for android"
     );
+    ensure!(
+        options.resolve(name, platform)?.signing != SigningMode::Unsigned,
+        "cannot run an unsigned Android APK; select --signing debug or configure signing"
+    );
     let (device, abi) = crate::devices::select(&platform.abis, device)?;
-    let mut vars = build(project, name, release, Some(&abi))?;
+    let mut vars = build(project, name, options, Some(&abi))?;
     let artifact = platform
         .artifact
         .as_ref()
@@ -301,7 +335,7 @@ pub fn doctor(project: &Project) -> Result<()> {
             println!("  template: {}", template.display());
             missing |= !template.is_dir();
         }
-        project.variables(name, false, None)?;
+        project.variables(name, &BuildOptions::default(), None)?;
     }
     if missing {
         bail!("one or more prerequisites are missing");

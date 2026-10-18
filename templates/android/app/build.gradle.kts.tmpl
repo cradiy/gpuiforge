@@ -15,6 +15,14 @@ require(gpuiAbis.isNotEmpty() && gpuiAbis.all { it == "arm64-v8a" || it == "x86_
     "Supported Android ABIs: arm64-v8a, x86_64"
 }
 
+val gpuiRustProfile = providers.gradleProperty("gpuiRustProfile")
+    .orElse(providers.environmentVariable("GPUIFORGE_RUST_PROFILE"))
+val gpuiSigningMode = providers.gradleProperty("gpuiSigning")
+    .orElse(providers.environmentVariable("GPUIFORGE_SIGNING_MODE")).getOrElse("auto")
+require(gpuiSigningMode in listOf("auto", "debug", "configured", "unsigned")) {
+    "Unsupported signing mode: $gpuiSigningMode"
+}
+
 android {
     namespace = "dev.gpuiforge.app"
     ndkPath = providers.environmentVariable("ANDROID_NDK_HOME").orNull
@@ -36,20 +44,31 @@ android {
         versionName = "{{var.version_name|kotlin}}"
         ndk { abiFilters += gpuiAbis }
     }
-    if (providers.environmentVariable("GPUIFORGE_SIGNING_ENABLED").orNull == "1") {
-        val signing = signingConfigs.create("gpuiRelease") {
+    val configuredSigning = if (providers.environmentVariable("GPUIFORGE_SIGNING_ENABLED").orNull == "1") {
+        signingConfigs.create("gpuiRelease") {
             storeFile = file(providers.environmentVariable("GPUIFORGE_SIGNING_KEYSTORE").get())
             keyAlias = providers.environmentVariable("GPUIFORGE_SIGNING_KEY_ALIAS").get()
             storePassword = providers.environmentVariable("GPUIFORGE_SIGNING_STORE_PASSWORD").get()
             keyPassword = providers.environmentVariable("GPUIFORGE_SIGNING_KEY_PASSWORD").get()
         }
-        buildTypes.getByName("release").signingConfig = signing
+    } else null
+    buildTypes.configureEach {
+        when (gpuiSigningMode) {
+            "debug" -> signingConfig = signingConfigs.getByName("debug")
+            "configured" -> signingConfig = requireNotNull(configuredSigning) {
+                "Configured signing requires GPUiForge signing credentials"
+            }
+            "unsigned" -> signingConfig = null
+            "auto" -> if (name == "release") signingConfig = configuredSigning
+        }
     }
 }
 
 for (profile in listOf("debug", "release")) {
     val variant = profile.replaceFirstChar { it.uppercase() }
-    val output = layout.buildDirectory.dir("rustJniLibs/$profile")
+    val rustProfile = gpuiRustProfile.getOrElse(if (profile == "debug") "dev" else "release")
+    require(rustProfile.matches(Regex("[A-Za-z0-9_-]+"))) { "Invalid Rust profile: $rustProfile" }
+    val output = layout.buildDirectory.dir("rustJniLibs/$profile/$rustProfile")
     android.sourceSets[profile].jniLibs.directories.add(output.get().asFile.absolutePath)
     val rustBuilds = gpuiAbis.map { abi ->
         tasks.register<Exec>("buildRust${variant}_${abi.replace('-', '_')}") {
@@ -58,7 +77,7 @@ for (profile in listOf("debug", "release")) {
                 "build-android-native", "--output", output.get().asFile.absolutePath,
                 "--manifest-path", "{{app_dir|kotlin}}/Cargo.toml",
                 "--library", "{{var.native_library|kotlin}}", "--abi", abi,
-                "--profile", profile, "--min-sdk", "{{var.min_sdk|kotlin}}")
+                "--profile", rustProfile, "--min-sdk", "{{var.min_sdk|kotlin}}")
         }
     }
     tasks.matching { it.name == "pre${variant}Build" }.configureEach { dependsOn(rustBuilds) }

@@ -1,5 +1,19 @@
 {
   "$defs": {
+    "AndroidBuildType": {
+      "oneOf": [
+        {
+          "const": "debug",
+          "description": "Android development build, with debugging enabled by the bundled template.",
+          "type": "string"
+        },
+        {
+          "const": "release",
+          "description": "Android release build. Signing is selected independently.",
+          "type": "string"
+        }
+      ]
+    },
     "AndroidFeature": {
       "oneOf": [
         {
@@ -110,6 +124,11 @@
           },
           "type": "array"
         },
+        "build-type": {
+          "$ref": "#/$defs/AndroidBuildType",
+          "default": "debug",
+          "description": "Default Android build type: debug or release. Defaults to debug, independently of rust-profile. --android-build-type overrides this field; --release selects release unless explicitly overridden. Does not select the signing key."
+        },
         "cleartext-domains": {
           "default": [],
           "description": "Exact hosts allowed to use HTTP while other destinations keep the default Android policy. Accepts ASCII DNS names, IPv4 addresses and bracketed IPv6 addresses, for example cloud.example.com, 192.168.1.10 or [2001:db8::1]. Do not include a scheme, port, path, wildcard or CIDR range. Subdomains must be listed separately; all ports on each host are allowed. Defaults to empty. Cannot be combined with cleartext-traffic: true. The network module's certificate revocation exceptions remain available. Requires the bundled Android template and INTERNET permission.",
@@ -209,6 +228,12 @@
           },
           "type": "array"
         },
+        "rust-profile": {
+          "default": "dev",
+          "description": "Default Cargo profile, shared by build and run. Defaults to dev. Use release or an application-defined profile for optimized builds. Profile settings come from the application workspace Cargo.toml. --rust-profile overrides this field; --release selects release unless --rust-profile is explicit.",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
         "share-mime-types": {
           "default": [],
           "description": "MIME types accepted from Android SEND and SEND_MULTIPLE intents, for example text/plain, image/* or */*. Defaults to empty, which does not register a share target. Use lowercase type/subtype syntax. The bundled host requires the sharing feature; the application handles received content itself.",
@@ -225,7 +250,12 @@
         },
         "signing": {
           "$ref": "#/$defs/Signing",
-          "description": "Optional Android release signing configuration. All four fields are required when present. Passwords come from environment variables during --release builds; debug builds use the development key. Without this object, the bundled release build produces an unsigned APK. Store the keystore outside the generated project."
+          "description": "Optional Android release signing configuration. All four fields are required when present. Passwords come from environment variables only when configured signing is selected. With signing-mode auto, debug uses the development key and release uses these credentials. Without this object, auto release builds remain unsigned; signing-mode debug explicitly enables development signing for release. Store the keystore outside the generated project."
+        },
+        "signing-mode": {
+          "$ref": "#/$defs/SigningMode",
+          "default": "auto",
+          "description": "Android signing policy: auto, debug, configured or unsigned. Auto uses the development key for debug; release uses the signing object when present, otherwise remains unsigned. Debug also signs release builds with Android's development key without requiring password variables. Configured requires signing credentials and never falls back. --signing overrides this field. Unsigned APKs cannot be installed by run."
         },
         "template": {
           "description": "Custom native project template directory. Relative paths resolve from the JSON file declaring this field. Files ending in .tmpl expand {{variables}} and lose that suffix; other files are copied verbatim. Symlinks are rejected. Omit together with recipe to use bundled Android templates.",
@@ -338,6 +368,12 @@
           },
           "type": "array"
         },
+        "rust-profile": {
+          "default": "dev",
+          "description": "Default Cargo profile, shared by build and run. Defaults to dev. Use release or an application-defined profile for optimized builds. Profile settings come from the application workspace Cargo.toml. --rust-profile overrides this field; --release selects release unless --rust-profile is explicit.",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
         "template": {
           "description": "Custom native project template directory. Relative paths resolve from the JSON file declaring this field. Files ending in .tmpl expand {{variables}} and lose that suffix; other files are copied verbatim. Symlinks are rejected. Omit together with recipe to use bundled Android templates.",
           "type": "string"
@@ -416,7 +452,7 @@
           "type": "string"
         },
         "store-password-env": {
-          "description": "Name of the environment variable containing the keystore password, not the password itself. It must be set to a nonempty value for release builds. Example: ANDROID_STORE_PASSWORD.",
+          "description": "Name of the environment variable containing the keystore password, not the password itself. It must be set to a nonempty value when configured signing is selected. Example: ANDROID_STORE_PASSWORD.",
           "type": "string"
         }
       },
@@ -428,12 +464,36 @@
       ],
       "type": "object"
     },
+    "SigningMode": {
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Debug builds use the development key. Release builds use configured credentials, or remain unsigned when none are configured.",
+          "type": "string"
+        },
+        {
+          "const": "debug",
+          "description": "Use Android's automatically managed debug key, including for release builds. Intended for device testing, not store publication.",
+          "type": "string"
+        },
+        {
+          "const": "configured",
+          "description": "Require the signing object and its password environment variables. Missing credentials fail the build.",
+          "type": "string"
+        },
+        {
+          "const": "unsigned",
+          "description": "Produce an unsigned APK. It cannot be installed by gpuiforge run.",
+          "type": "string"
+        }
+      ]
+    },
     "Step": {
       "additionalProperties": false,
       "properties": {
         "args": {
           "default": [],
-          "description": "Arguments passed individually to the executable, in order. Defaults to empty. Spaces do not split an argument; shell quoting, pipes, globbing and $VAR expansion are not performed by GPUiForge. Common placeholders: {{cargo_profile}} (dev/release), {{profile}} (debug/release), {{variant}} (Debug/Release), {{project_dir}} and {{abis}}. Android run steps also receive {{adb}}, {{device}} and {{artifact}}. Custom values use {{var.<name>}} or {{path.<name>}}.",
+          "description": "Arguments passed individually to the executable, in order. Defaults to empty. Spaces do not split an argument; shell quoting, pipes, globbing and $VAR expansion are not performed by GPUiForge. Common placeholders: {{cargo_profile}} (resolved Cargo profile), {{profile}} (debug/release), {{variant}} (Debug/Release), {{signing_mode}} (resolved Android signing policy), {{project_dir}} and {{abis}}. Android run steps also receive {{adb}}, {{device}} and {{artifact}}. Custom values use {{var.<name>}} or {{path.<name>}}.",
           "items": {
             "type": "string"
           },

@@ -32,10 +32,8 @@ pub fn build(
         "invalid native library name: {library}"
     );
     ensure!(api >= 26, "Android minimum SDK must be at least 26");
-    ensure!(
-        matches!(profile, "debug" | "release"),
-        "unsupported profile: {profile}"
-    );
+    let profile = if profile == "debug" { "dev" } else { profile };
+    crate::build_options::validate_rust_profile(profile)?;
     let target = crate::android_tools::target(abi)?;
     let manifest = crate::host::canonicalize(manifest)?;
     let package = manifest.parent().context("application directory missing")?;
@@ -80,9 +78,7 @@ pub fn build(
         .env(format!("CC_{key}"), &tools.cc)
         .env(format!("CXX_{key}"), &tools.cxx)
         .env(format!("AR_{key}"), &tools.ar);
-    if profile == "release" {
-        cargo.arg("--release");
-    }
+    cargo.args(["--profile", profile]);
     let status = cargo
         .args([
             "--",
@@ -98,7 +94,10 @@ pub fn build(
     let destination = output.join(abi);
     fs::create_dir_all(&destination)?;
     fs::copy(
-        target_dir.join(target).join(profile).join(&library),
+        target_dir
+            .join(target)
+            .join(if profile == "dev" { "debug" } else { profile })
+            .join(&library),
         destination.join(&library),
     )
     .with_context(|| format!("packaging {library} for {abi}"))?;

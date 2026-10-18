@@ -112,7 +112,7 @@ fn synchronize(project: &Project, name: &str, check: bool) -> Result<PathBuf> {
     );
     let directory = project.directory(name)?;
     no_symlinks(&directory)?;
-    let vars = project.variables(name, false, None)?;
+    let vars = project.variables(name, &crate::build_options::BuildOptions::default(), None)?;
     let mut files = BTreeMap::new();
     if platform.bundled {
         for &(name, bytes) in crate::ANDROID_FILES {

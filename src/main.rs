@@ -1,6 +1,7 @@
 mod android;
 mod android_features;
 mod android_tools;
+mod build_options;
 mod config;
 mod devices;
 mod execute;
@@ -56,8 +57,8 @@ enum Action {
     /// Build a configured platform (prompts when omitted).
     Build {
         platform: Option<String>,
-        #[arg(long)]
-        release: bool,
+        #[command(flatten)]
+        options: build_options::BuildOptions,
         /// Build one enabled Android ABI instead of all configured ABIs.
         #[arg(long, value_parser = ["arm64-v8a", "x86_64"])]
         abi: Option<String>,
@@ -67,8 +68,8 @@ enum Action {
         platform: Option<String>,
         #[arg(long)]
         device: Option<String>,
-        #[arg(long)]
-        release: bool,
+        #[command(flatten)]
+        options: build_options::BuildOptions,
     },
     /// Check local build tools and configured project paths.
     Doctor,
@@ -93,7 +94,7 @@ enum Action {
         library: String,
         #[arg(long, value_parser = ["arm64-v8a", "x86_64"])]
         abi: String,
-        #[arg(long, default_value = "debug", value_parser = ["debug", "release"])]
+        #[arg(long, default_value = "dev")]
         profile: String,
         #[arg(long, default_value = "26")]
         min_sdk: u32,
@@ -183,21 +184,21 @@ fn run(cli: Cli) -> Result<()> {
         }
         Action::Build {
             platform,
-            release,
+            options,
             abi,
         } => {
             let platform = platform.or_else(|| abi.as_ref().map(|_| "android".into()));
             let name = execute::platform(&project, platform)?;
-            execute::build(&project, &name, release, abi.as_deref())?;
+            execute::build(&project, &name, &options, abi.as_deref())?;
         }
         Action::Run {
             platform,
             device,
-            release,
+            options,
         } => {
             let platform = platform.or_else(|| device.as_ref().map(|_| "android".into()));
             let name = execute::platform(&project, platform)?;
-            execute::run(&project, &name, release, device.as_deref())?;
+            execute::run(&project, &name, &options, device.as_deref())?;
         }
         Action::Doctor => execute::doctor(&project)?,
         Action::Platform {

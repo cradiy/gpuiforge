@@ -7,6 +7,10 @@ pub fn text(recipe: bool) -> Result<String> {
     non_null_options(&mut platform);
     let properties = platform["properties"].as_object_mut().unwrap();
     properties.get_mut("inset-handling").unwrap()["default"] = "application".into();
+    properties.get_mut("rust-profile").unwrap()["default"] = "dev".into();
+    properties.get_mut("rust-profile").unwrap()["pattern"] = "^[A-Za-z0-9_-]+$".into();
+    properties.get_mut("build-type").unwrap()["default"] = "debug".into();
+    properties.get_mut("signing-mode").unwrap()["default"] = "auto".into();
     properties.get_mut("abis").unwrap()["items"] = json!({"oneOf":[
         {"type":"string", "const":"arm64-v8a", "description":"64-bit ARM Android devices. Uses Rust target aarch64-linux-android; commonly used for physical phones and ARM emulators."},
         {"type":"string", "const":"x86_64", "description":"64-bit x86 Android devices or emulators. Uses Rust target x86_64-linux-android; select it for an x86_64 emulator."}
@@ -97,6 +101,8 @@ pub fn text(recipe: bool) -> Result<String> {
         "cleartext-traffic",
         "cleartext-domains",
         "signing",
+        "signing-mode",
+        "build-type",
         "url-schemes",
         "share-mime-types",
         "abis",

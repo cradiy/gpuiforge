@@ -323,10 +323,10 @@ GPUI crates; the application selects its own framework dependencies.
 Files ending in `.tmpl` are UTF-8 templates; generation removes that suffix.
 Other files and explicit copies are copied verbatim, including executable
 permissions. Variables use `{{name}}`; available names are `app.name`, `app_dir`,
-`project_dir`, `tool_path` (the running GPUiForge executable), `profile` (`debug`/`release`), `cargo_profile` (`dev`/`release`),
-`variant` (`Debug`/`Release`), `abis`, `application_id`, `activity`, `var.<key>`,
-and `path.<key>`. `apk_suffix` is empty in debug and `-unsigned` in release for
-the supplied Android recipe. `|xml` escapes XML values; `|kotlin` escapes Kotlin
+`project_dir`, `tool_path` (the running GPUiForge executable), `profile` (`debug`/`release`), `cargo_profile` (the selected Cargo profile),
+`variant` (`Debug`/`Release`), `signing_mode`, `abis`, `application_id`, `activity`, `var.<key>`,
+and `path.<key>`. `apk_suffix` is `-unsigned` when signing is disabled and empty otherwise
+for the supplied Android recipe. `|xml` escapes XML values; `|kotlin` escapes Kotlin
 string contents, including dollar signs. Unknown variables or filters fail
 generation. Templates describe both build profiles; profile-specific values
 are intended for process steps and artifact paths.
@@ -366,11 +366,60 @@ is not provided: choose a new empty project-dir to generate another project.
 Rust packaging still uses GPUiForge. Direct Gradle invocations resolve
 `gpuiforge` from PATH, or accept `-PgpuiForgeExecutable=/path/to/gpuiforge`.
 
+## Build profiles and signing modes
+
+Rust compilation, Android build type and signing are independent. With no
+overrides, Rust uses Cargo's `dev` profile and Android uses `debug` with its
+development signing key.
+
+| Option | Configuration field | Values |
+| --- | --- | --- |
+| `--rust-profile` | `rust-profile` | `dev`, `release`, or a workspace-defined Cargo profile |
+| `--android-build-type` | `build-type` | `debug`, `release` |
+| `--signing` | `signing-mode` | `auto`, `debug`, `configured`, `unsigned` |
+
+Set these fields inside the platform object in `gpuiforge.json`.
+`rust-profile` also applies to desktop and Web commands that use
+`{{cargo_profile}}`. The other two settings are Android-only.
+
+Explicit CLI options override configuration. `--release` selects Rust
+`release` and Android `release`, overriding their configured defaults;
+an explicit `--rust-profile` or `--android-build-type` takes precedence over
+that shortcut. Signing is resolved separately.
+
+`auto` uses the debug key for Android debug, and uses the `signing` object
+for Android release when it exists; otherwise release is unsigned.
+`debug` explicitly selects Android's automatically managed development key
+for either build type and does not read configured signing passwords.
+`configured` requires the `signing` object and its credentials; missing
+credentials fail without falling back. `unsigned` produces an APK for external
+signing. `run` rejects unsigned builds before selecting a device.
+
+Use `--rust-profile release` with a debug Android build to evaluate optimized
+Rust code while retaining Android debugging. To test an Android release build
+without a publishing key, combine `--release` with `--signing debug`.
+Development signing does not enable debugging in a release build. Debug-signed
+APKs are for testing, not store publication. Packages with the same application
+ID but different signing certificates cannot normally update each other.
+
+Cargo profile settings are taken from the application workspace. `dev` may
+include optimized dependency overrides; `release` need not strip all debug
+symbols. Android release does not automatically enable R8 in the bundled
+template. JNI outputs are separated by Android build type and Rust profile.
+
+Custom build steps receive the selected `cargo_profile`, `profile`,
+`variant`, `signing_mode` and `apk_suffix` template variables.
+Android build processes also receive `GPUIFORGE_RUST_PROFILE` and
+`GPUIFORGE_SIGNING_MODE`; the bundled Gradle project consumes them.
+Direct Gradle invocations can use `-PgpuiRustProfile=<profile>` and
+`-PgpuiSigning=<mode>`. Without these overrides, Gradle follows each variant's
+Rust profile and its standard signing defaults. Manually maintained or custom
+projects must implement these options in their own build scripts.
+
 ## Build boundaries
 
-The supplied Android debug recipe produces a signed development APK. Release
-produces `app-release-unsigned.apk` without signing configuration, or
-`app-release.apk` when signing is configured. Custom Gradle projects must keep
+The bundled Android build produces `app-<build-type>.apk` when signed and
+`app-<build-type>-unsigned.apk` when unsigned. Custom Gradle projects must keep
 `artifact` consistent with their output. AAB packaging, store publication,
 framework update automation and native source overlays are not built-in commands.
 
@@ -463,12 +512,13 @@ maintain their own manifest filters and forward incoming intents.
 The keystore must already exist. Paths are relative to the configuration file
 (or recipe when declared there); absolute paths are also supported. Keep the
 keystore outside the generated Android directory. GPUiForge does not create,
-copy, replace, or delete keys. Exclude `.gpuiforge/signing/` from version control
+copy, replace, or delete publishing keys. Development signing uses the
+Android tools\' automatically managed debug keystore. Exclude `.gpuiforge/signing/` from version control
 and keep a separate backup.
 
-Provide the named password environment variables before `build android --release`
-or `run android --release`. Missing files and unset or empty passwords fail before
-the build. Debug builds do not require release credentials. Passwords are passed
+Provide the named password environment variables when using configured signing.
+Missing files and unset or empty passwords fail before the build. Explicit debug
+signing does not require these credentials, including for release builds. Passwords are passed
 to build child processes through the environment, not template variables or CLI
 arguments. Generated Gradle files contain no password values. Build scripts run
 with access to these credentials and must be trusted.
@@ -477,5 +527,5 @@ The bundled Gradle project and its ejected copy use `GPUIFORGE_SIGNING_ENABLED`,
 `GPUIFORGE_SIGNING_KEYSTORE`, `GPUIFORGE_SIGNING_KEY_ALIAS`,
 `GPUIFORGE_SIGNING_STORE_PASSWORD`, and `GPUIFORGE_SIGNING_KEY_PASSWORD`.
 Custom build steps can consume the same environment. These names are reserved
-for GPUiForge's build process. A configured release build sets the enabled flag
+for GPUiForge's build process. A build using configured signing sets the enabled flag
 to `1`; other Android builds set it to `0`.
