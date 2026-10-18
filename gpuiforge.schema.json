@@ -179,6 +179,10 @@
           "default": "application",
           "description": "Who applies safe-area and keyboard avoidance in the bundled Android Activity. Defaults to application: the GPUI viewport fills the window and Window::insets() reports occlusion in logical pixels without consumed padding. Use host for automatic avoidance; Rust can use insets.effective() in either mode without double padding. This does not hide system bars. Regenerate managed Android sources with gpuiforge sync after changing it."
         },
+        "logs": {
+          "$ref": "#/$defs/LogConfig",
+          "description": "Android application log defaults. gpuiforge logs follows the installed application's UID without building or launching it. Command-line options override these settings."
+        },
         "management": {
           "$ref": "#/$defs/Management",
           "description": "Native project ownership. Defaults to managed. Use gpuiforge platform eject android to export generated sources before taking manual ownership."
@@ -421,6 +425,42 @@
           "type": "string"
         }
       ]
+    },
+    "LogConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/LogLevel",
+          "description": "Minimum log priority. Defaults to debug."
+        },
+        "tags": {
+          "default": [],
+          "description": "Exact tags to include. Empty selects all tags. CLI --tag values replace this list. Tags must be nonempty and contain no whitespace, control characters, colons or asterisks.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tail": {
+          "default": 100,
+          "description": "Positive logcat history limit before following, or when dumping. Defaults to 100. Filtering may produce fewer lines.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "LogLevel": {
+      "enum": [
+        "verbose",
+        "debug",
+        "info",
+        "warn",
+        "error",
+        "fatal"
+      ],
+      "type": "string"
     },
     "Management": {
       "oneOf": [

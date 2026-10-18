@@ -7,6 +7,7 @@ mod devices;
 mod execute;
 mod generate;
 mod host;
+mod logs;
 mod native_build;
 mod schema;
 include!(concat!(env!("OUT_DIR"), "/android_files.rs"));
@@ -75,6 +76,11 @@ enum Action {
     Doctor,
     /// List Android devices, architectures and connection status.
     Devices,
+    /// Follow the configured Android application's logs (Ctrl+C to stop).
+    Logs {
+        #[command(flatten)]
+        options: logs::LogOptions,
+    },
     #[command(hide = true)]
     PrepareAndroid {
         #[arg(long)]
@@ -201,6 +207,7 @@ fn run(cli: Cli) -> Result<()> {
             execute::run(&project, &name, &options, device.as_deref())?;
         }
         Action::Doctor => execute::doctor(&project)?,
+        Action::Logs { options } => logs::run(&project, &options)?,
         Action::Platform {
             command: PlatformAction::Eject { platform, output },
         } => {

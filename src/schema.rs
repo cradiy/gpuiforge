@@ -107,6 +107,7 @@ pub fn text(recipe: bool) -> Result<String> {
         "share-mime-types",
         "abis",
         "application-id",
+        "logs",
         "activity",
     ] {
         commands["properties"].as_object_mut().unwrap().remove(name);

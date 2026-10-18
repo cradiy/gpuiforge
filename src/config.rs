@@ -94,6 +94,8 @@ pub struct Platform {
     pub signing_mode: Option<SigningMode>,
     /// Android package identity, such as com.example.app. Required directly or through a recipe. Use at least two dot-separated segments starting with ASCII letters; remaining characters may be letters, digits or underscores. This is independent of the Kotlin host namespace and Rust package name.
     pub application_id: Option<String>,
+    /// Android application log defaults. gpuiforge logs follows the installed application's UID without building or launching it. Command-line options override these settings.
+    pub logs: Option<crate::logs::LogConfig>,
     /// Who applies safe-area and keyboard avoidance in the bundled Android Activity. Defaults to application: the GPUI viewport fills the window and Window::insets() reports occlusion in logical pixels without consumed padding. Use host for automatic avoidance; Rust can use insets.effective() in either mode without double padding. This does not hide system bars. Regenerate managed Android sources with gpuiforge sync after changing it.
     pub inset_handling: Option<InsetHandling>,
     /// Android Activity class used by launch steps through {{activity}}. Bundled default: dev.gpuiforge.app.MainActivity. Changing this value does not rename generated Kotlin classes or Manifest entries; keep it aligned with a custom or manually maintained host.
@@ -342,6 +344,9 @@ impl Project {
                 relative(&copy.to)?;
             }
             if name == "android" {
+                if let Some(logs) = &platform.logs {
+                    logs.validate()?;
+                }
                 ensure!(
                     bundled
                         || (platform.features.is_empty()
@@ -517,6 +522,7 @@ impl Project {
                         && platform.share_mime_types.is_empty(),
                     "features, icons, cleartext settings, inset-handling, permissions, signing, url-schemes and share-mime-types are Android-only settings"
                 );
+                ensure!(platform.logs.is_none(), "logs is an Android-only setting");
             }
             if let Some(profile) = &platform.rust_profile {
                 crate::build_options::validate_rust_profile(profile)?;

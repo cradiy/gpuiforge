@@ -15,6 +15,8 @@ cargo install --path .
 
 Android projects can be generated automatically or exported for manual
 maintenance. Desktop and Web commands are configured as process steps.
+`gpuiforge logs` follows the configured Android application's logs, with device
+selection and optional priority, tag and history filters.
 See [configuration and workflows](docs/usage.md) for setup and project ownership.
 
 ## License

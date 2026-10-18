@@ -135,6 +135,18 @@ pub fn print() -> Result<()> {
 }
 
 pub fn select(enabled: &[String], requested: Option<&str>) -> Result<(String, String)> {
+    let (serial, abi) = select_available(Some(enabled), requested)?;
+    Ok((serial, abi.context("selected device has no usable ABI")?))
+}
+
+pub fn select_for_logs(requested: Option<&str>) -> Result<String> {
+    Ok(select_available(None, requested)?.0)
+}
+
+fn select_available(
+    enabled: Option<&[String]>,
+    requested: Option<&str>,
+) -> Result<(String, Option<String>)> {
     let devices = list()?;
     if let Some(serial) = requested {
         let device = devices
@@ -148,23 +160,33 @@ pub fn select(enabled: &[String], requested: Option<&str>) -> Result<(String, St
             "device is not available: {}",
             device.label()
         );
-        let abi = device.abi(enabled).with_context(|| {
-            format!(
-                "device has no usable ABI from [{}]: {}",
-                enabled.join(", "),
-                device.label()
-            )
-        })?;
-        return Ok((device.serial.clone(), abi.into()));
+        let abi = enabled
+            .map(|enabled| {
+                device.abi(enabled).with_context(|| {
+                    format!(
+                        "device has no usable ABI from [{}]: {}",
+                        enabled.join(", "),
+                        device.label()
+                    )
+                })
+            })
+            .transpose()?;
+        return Ok((device.serial.clone(), abi.map(str::to_owned)));
     }
     let compatible: Vec<_> = devices
         .iter()
-        .filter_map(|device| device.abi(enabled).map(|abi| (device, abi)))
+        .filter(|device| device.state == "device")
+        .filter_map(|device| match enabled {
+            Some(enabled) => device.abi(enabled).map(|abi| (device, Some(abi))),
+            None => Some((device, None)),
+        })
         .collect();
     ensure!(
         !compatible.is_empty(),
-        "no available Android device supports [{}]; connect and authorize a compatible device or start an emulator.\n{}",
-        enabled.join(", "),
+        "no available Android device{}; connect and authorize a device or start an emulator.\n{}",
+        enabled
+            .map(|abis| format!(" supports [{}]", abis.join(", ")))
+            .unwrap_or_default(),
         devices
             .iter()
             .map(Device::label)
@@ -176,7 +198,7 @@ pub fn select(enabled: &[String], requested: Option<&str>) -> Result<(String, St
     } else {
         ensure!(
             io::stdin().is_terminal(),
-            "multiple compatible Android devices; pass --device SERIAL (see `gpuiforge devices`)"
+            "multiple available Android devices; pass --device SERIAL (see `gpuiforge devices`)"
         );
         let labels = compatible
             .iter()
@@ -185,6 +207,10 @@ pub fn select(enabled: &[String], requested: Option<&str>) -> Result<(String, St
         crate::execute::choose("Choose an Android device", &labels)?
     };
     let (device, abi) = compatible[index];
-    eprintln!("Using {} ({abi})", device.serial);
-    Ok((device.serial.clone(), abi.into()))
+    if let Some(abi) = abi {
+        eprintln!("Using {} ({abi})", device.serial);
+    } else {
+        eprintln!("Using {}", device.serial);
+    }
+    Ok((device.serial.clone(), abi.map(str::to_owned)))
 }

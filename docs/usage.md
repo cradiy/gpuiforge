@@ -162,6 +162,44 @@ all missing prerequisites together. It does not install tools, start emulators, 
 driver compatibility. Platform selection lists configured targets; builds report
 unavailable tools. GPUiForge does not provide a bundled Web recipe.
 
+## Android application logs
+
+`gpuiforge logs` follows logs for the Android `application-id` in the current
+configuration. It uses a sole authorized device automatically, prompts when
+multiple devices are available, and accepts `--device SERIAL` for explicit or
+non-interactive selection. Device ABI compatibility is not required for logs.
+Only ADB and an installed application are needed; the command does not build,
+generate, install or launch the application.
+
+Logs are filtered by the installed application's UID for the device's current
+Android user. Listening works before application startup and continues across
+process restarts. Ordinary application subprocesses with the same UID are
+included; isolated processes with other UIDs are excluded. Legacy applications
+sharing a UID also share this log scope. System-process crash reports are not
+necessarily included.
+
+The default is to request up to 100 recent logcat records and continue streaming
+at debug priority or higher. Filtering may produce fewer history lines. Output
+includes timestamps, process/thread IDs, priority and tags. Terminal output uses
+priority colors unless `NO_COLOR` is set; redirected output has no added colors.
+Ctrl+C stops the listener and its ADB child process. Device disconnects and
+logcat failures end the command with an error.
+
+| Option | Meaning |
+| --- | --- |
+| `--device SERIAL` | Choose a connected, authorized device |
+| `--level LEVEL` | Minimum priority: `verbose`, `debug`, `info`, `warn`, `error`, `fatal` |
+| `--tag TAG` | Include an exact tag; repeat for multiple tags |
+| `--tail N` | Positive logcat history limit |
+| `--dump` | Print buffered logs and exit instead of following |
+
+Optional defaults belong in `platforms.android.logs`: `level` (default `debug`),
+`tail` (default `100`) and `tags` (default an empty array, including all tags).
+CLI options override configuration; any `--tag` options replace the configured
+tag list. Tags must be nonempty and contain no whitespace, control characters,
+colons or asterisks. These settings also work with custom recipes and manually
+maintained Android projects. They do not require synchronizing native sources.
+
 ## Android host features and icons
 
 Select optional host modules in the Android platform configuration:
