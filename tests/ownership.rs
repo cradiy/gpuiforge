@@ -911,3 +911,92 @@ esac
     assert!(String::from_utf8_lossy(&result.stderr).contains("staging output must not contain"));
     assert!(!app.0.join("native-manifest").exists());
 }
+
+#[test]
+fn info_resolves_profiles_and_paths_without_side_effects() {
+    let mut app = Fixture::new();
+    app.0 = dunce::canonicalize(&app.0).unwrap();
+    fs::write(
+        app.0.join("Cargo.toml"),
+        "[package]\nname = 'info-probe'\nversion = '0.1.0'\n[workspace]\n",
+    )
+    .unwrap();
+    fs::create_dir(app.0.join("src")).unwrap();
+    fs::write(app.0.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let config_path = app.0.join("gpuiforge.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let android = &mut config["platforms"]["android"];
+    android["build"] = serde_json::json!([{"program": "command-must-not-execute"}]);
+    android["project-dir"] = "native-project".into();
+    android["staging-root"] = "native-sources".into();
+    android["variables"]["native_library"] = "info_probe".into();
+    android["artifact"] = "outputs/{{profile}}/package{{apk_suffix}}.apk".into();
+    android["signing-mode"] = "configured".into();
+    android["signing"] = serde_json::json!({
+        "keystore": "unused-key.jks", "key-alias": "app-release",
+        "store-password-env": "INFO_PROBE_PASSWORD", "key-password-env": "INFO_PROBE_PASSWORD"
+    });
+    fs::write(&config_path, config.to_string()).unwrap();
+    let before = fs::read(&config_path).unwrap();
+    let cargo_target = app.0.join("cargo-output");
+    let output = Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+        .args(["info", "--release", "--rust-profile", "inspect"])
+        .current_dir(&app.0)
+        .env("CARGO_TARGET_DIR", &cargo_target)
+        .env("GPUIFORGE_STAGING_ROOT", app.0.join("other-staging"))
+        .env("INFO_PROBE_PASSWORD", "credential-must-stay-private")
+        .env("PATH", app.0.join("missing-tools"))
+        .env("JAVA_HOME", app.0.join("missing-jdk"))
+        .env("ANDROID_HOME", app.0.join("missing-sdk"))
+        .env("ANDROID_NDK_HOME", app.0.join("missing-ndk"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Rust profile: inspect"));
+    assert!(text.contains("Android build type: release"));
+    assert!(text.contains("Signing mode: configured"));
+    assert!(
+        text.contains(&format!(
+            "Cargo target directory: {}",
+            cargo_target.display()
+        )),
+        "{text}"
+    );
+    assert!(text.contains(&format!(
+        "Prepared project (x86_64): {}",
+        app.0.join("native-sources/info_probe/x86_64").display()
+    )));
+    assert!(text.contains(&format!(
+            "Artifact: {}",
+            app.0
+                .join("native-project/outputs/release/package.apk")
+                .display()
+        )));
+    assert!(!text.contains("credential-must-stay-private"));
+    assert!(!cargo_target.exists());
+    assert!(!app.0.join("native-sources").exists());
+    assert!(!app.0.join("native-project").exists());
+    let output = Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+        .args(["info", "android"])
+        .current_dir(&app.0)
+        .env_remove("CARGO_TARGET_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains(&format!(
+        "Cargo target directory: {}",
+        app.0.join("target").display()
+    )));
+    assert!(!app.0.join("target").exists());
+    assert_eq!(fs::read(config_path).unwrap(), before);
+}

@@ -27,6 +27,7 @@ impl App {
                 "app": {"name": "Log probe"},
                 "platforms": {"android": {
                     "application-id": "org.forge.logprobe",
+                    "activity": "org.forge.logprobe.EntryActivity",
                     "template": "unused-template",
                     "management": "manual",
                     "abis": ["arm64-v8a"],
@@ -47,10 +48,14 @@ case "$*" in
   *'shell cmd package list packages'*)
     printf 'package:org.forge.logprobe.helper uid:11970\n'
     if [ "$PROBE_STATE" != missing ]; then printf 'package:org.forge.logprobe uid:11971\n'; fi ;;
+  *' install '*) if [ "$PROBE_STATE" = install-failed ]; then exit 4; fi ;;
+  *'am force-stop'*) if [ "$PROBE_STATE" = stop-failed ]; then printf 'Error: unable to stop\n'; fi ;;
+  *'am start'*) if [ "$PROBE_STATE" = launch-failed ]; then printf 'Error: unable to launch\n'; fi ;;
   *logcat*)
     printf '%s\n' "$$" > "$PROBE_ROOT/logcat-pid"
     if [ "$PROBE_STATE" = failed ]; then printf 'transport lost\n' >&2; exit 7; fi
     printf 'listener output\n'
+    if [ "$PROBE_LOGCAT_ONCE" = 1 ]; then exit 0; fi
     case " $* " in *' -d '*) exit 0 ;; esac
     exec sleep 30 ;;
   *) printf 'unexpected adb invocation\n' >&2; exit 8 ;;
@@ -61,9 +66,14 @@ esac
     }
 
     fn command(&self, args: &[&str]) -> Command {
+        let mut command = self.cli(&["logs"]);
+        command.args(args);
+        command
+    }
+
+    fn cli(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_gpuiforge"));
         command
-            .arg("logs")
             .args(args)
             .current_dir(&self.0)
             .env("ANDROID_HOME", self.0.join("sdk"))
@@ -185,9 +195,13 @@ fn logs_reject_unavailable_scope_and_report_logcat_failures() {
 #[test]
 fn logs_stream_before_exit_and_interrupt_reaps_the_listener() {
     let app = App::new();
+    follow_and_interrupt(&app, &["logs"]);
+}
+
+fn follow_and_interrupt(app: &App, args: &[&str]) {
     let stdout = fs::File::create(app.0.join("stdout")).unwrap();
     let mut listener = Listener(
-        app.command(&[])
+        app.cli(args)
             .stdout(stdout)
             .stderr(Stdio::null())
             .spawn()
@@ -195,9 +209,8 @@ fn logs_stream_before_exit_and_interrupt_reaps_the_listener() {
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if fs::read(app.0.join("stdout"))
-            .unwrap()
-            .starts_with(b"listener output\n")
+        if String::from_utf8_lossy(&fs::read(app.0.join("stdout")).unwrap())
+            .contains("listener output\n")
         {
             break;
         }
@@ -238,4 +251,101 @@ fn logs_stream_before_exit_and_interrupt_reaps_the_listener() {
             .success(),
         "ADB child survived interrupt"
     );
+}
+
+#[test]
+fn run_logs_preserves_steps_and_reuses_selected_device() {
+    let app = App::new();
+    fs::create_dir(app.0.join("native")).unwrap();
+    let config_path = app.0.join("gpuiforge.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let android = &mut config["platforms"]["android"];
+    android["abis"] = serde_json::json!(["x86_64"]);
+    android["project-dir"] = "native".into();
+    android["artifact"] = "probe.apk".into();
+    android["build"] = serde_json::json!([{
+        "program": "sh",
+        "args": ["-c", "printf 'build:%s\\n' \"$1\" >> \"$PROBE_ROOT/calls\"; printf package > \"$PROBE_ROOT/native/probe.apk\"", "build-probe", "{{abis}}"]
+    }]);
+    android["run"] = serde_json::json!([
+        {"program": "{{adb}}", "args": ["-s", "{{device}}", "install", "-r", "{{artifact}}"]},
+        {"program": "sh", "args": ["-c", "printf 'custom-run\\n' >> \"$PROBE_ROOT/calls\""]},
+        {"program": "{{adb}}", "args": ["-s", "{{device}}", "shell", "am", "start", "-W", "-n", "{{application_id}}/{{activity}}"], "error-pattern": "Error:"}
+    ]);
+    fs::write(&config_path, config.to_string()).unwrap();
+    follow_and_interrupt(&app, &["run", "--logs"]);
+    let calls = app.calls();
+    assert_eq!(
+        calls.lines().filter(|line| *line == "devices -l").count(),
+        1
+    );
+    let build = calls.find("build:x86_64").unwrap();
+    let install = calls.find("-s probe-one install -r").unwrap();
+    let custom = calls.find("custom-run").unwrap();
+    let launch = calls.find("-s probe-one shell am start").unwrap();
+    let logs = calls.find("-s probe-one logcat --uid=11971").unwrap();
+    assert!(build < install && install < custom && custom < launch && launch < logs);
+    assert!(calls.contains("-T 37 -- *:S Scheduler:W"));
+
+    for (failure, launched) in [("install-failed", false), ("launch-failed", true)] {
+        fs::write(app.0.join("calls"), "").unwrap();
+        let output = app
+            .cli(&["run", "--logs", "--device", "probe-one"])
+            .env("PROBE_STATE", failure)
+            .env("PROBE_LOGCAT_ONCE", "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let calls = app.calls();
+        assert_eq!(calls.contains("am start"), launched);
+        assert!(!calls.contains("logcat"));
+    }
+    config["platforms"]["desktop"] = serde_json::json!({
+        "run": [{"program": "sh", "args": ["-c", "printf executed > desktop-ran"]}]
+    });
+    fs::write(&config_path, config.to_string()).unwrap();
+    let output = app.cli(&["run", "desktop", "--logs"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(!app.0.join("desktop-ran").exists());
+}
+
+#[test]
+fn restart_uses_installed_app_without_build_or_abi_selection() {
+    let app = App::new();
+    follow_and_interrupt(&app, &["restart", "--logs"]);
+    let calls = app.calls();
+    assert_eq!(
+        calls.lines().filter(|line| *line == "devices -l").count(),
+        1
+    );
+    let stop = calls
+        .find("-s probe-one shell am force-stop --user current org.forge.logprobe")
+        .unwrap();
+    let start = calls.find("-s probe-one shell am start -W --user current -n org.forge.logprobe/org.forge.logprobe.EntryActivity").unwrap();
+    let logs = calls.find("-s probe-one logcat --uid=11971").unwrap();
+    assert!(stop < start && start < logs);
+    assert!(!calls.contains("install") && !app.0.join("target").exists());
+
+    fs::write(app.0.join("calls"), "").unwrap();
+    assert!(app.cli(&["restart"]).output().unwrap().status.success());
+    assert!(!app.calls().contains("logcat"));
+    for (failure, stopped, launched) in [
+        ("missing", false, false),
+        ("stop-failed", true, false),
+        ("launch-failed", true, true),
+    ] {
+        fs::write(app.0.join("calls"), "").unwrap();
+        let output = app
+            .cli(&["restart", "--logs"])
+            .env("PROBE_STATE", failure)
+            .env("PROBE_LOGCAT_ONCE", "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let calls = app.calls();
+        assert_eq!(calls.contains("am force-stop"), stopped);
+        assert_eq!(calls.contains("am start"), launched);
+        assert!(!calls.contains("logcat"));
+    }
 }

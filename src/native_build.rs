@@ -1,5 +1,48 @@
 use anyhow::{Context, Result, ensure};
-use std::{ffi::OsString, fs, path::Path, process::Command};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+pub fn workspace(manifest: &Path) -> Result<PathBuf> {
+    let located = Command::new("cargo")
+        .args(["locate-project", "--workspace", "--manifest-path"])
+        .arg(manifest)
+        .args(["--message-format", "plain"])
+        .current_dir(manifest.parent().context("application directory missing")?)
+        .output()
+        .context("locating Cargo workspace")?;
+    ensure!(
+        located.status.success(),
+        "cargo locate-project failed: {}",
+        String::from_utf8_lossy(&located.stderr)
+    );
+    let workspace_manifest = String::from_utf8(located.stdout)?;
+    Ok(Path::new(workspace_manifest.trim())
+        .parent()
+        .context("workspace directory missing")?
+        .to_path_buf())
+}
+
+pub fn target_directory(workspace: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"))
+}
+
+pub fn staging_directory(package: &Path, target: &Path, root: Option<&Path>) -> Result<PathBuf> {
+    let root = root
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("GPUIFORGE_STAGING_ROOT").map(PathBuf::from))
+        .unwrap_or_else(|| target.join("android"));
+    ensure!(
+        !root.as_os_str().is_empty(),
+        "staging root must not be empty"
+    );
+    Ok(package.join(root))
+}
 
 pub fn gradle(args: &[OsString]) -> Result<()> {
     let java = crate::android_tools::java_development_kit()?
@@ -38,40 +81,17 @@ pub fn build(
     let target = crate::android_tools::target(abi)?;
     let manifest = crate::host::canonicalize(manifest)?;
     let package = manifest.parent().context("application directory missing")?;
-    let located = Command::new("cargo")
-        .args(["locate-project", "--workspace", "--manifest-path"])
-        .arg(&manifest)
-        .args(["--message-format", "plain"])
-        .current_dir(package)
-        .output()
-        .context("locating Cargo workspace")?;
-    ensure!(
-        located.status.success(),
-        "cargo locate-project failed: {}",
-        String::from_utf8_lossy(&located.stderr)
-    );
-    let workspace_manifest = String::from_utf8(located.stdout)?;
-    let workspace = Path::new(workspace_manifest.trim())
-        .parent()
-        .context("workspace directory missing")?;
+    let workspace = workspace(&manifest)?;
     let ndk = crate::android_tools::ndk(package, target, api)?;
     let tools = crate::host::NdkTools::new(Path::new(&ndk), target, api)?;
     crate::android_tools::rust_target(package, target)?;
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
+    let target_dir = target_directory(&workspace);
     fs::create_dir_all(&target_dir)?;
     let target_dir = crate::host::canonicalize(&target_dir)?;
-    let staging_root = staging_root
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("GPUIFORGE_STAGING_ROOT").map(std::path::PathBuf::from))
-        .unwrap_or_else(|| target_dir.join("android"));
-    ensure!(
-        !staging_root.as_os_str().is_empty(),
-        "staging root must not be empty"
-    );
-    let prepared = package.join(staging_root).join(library).join(abi);
-    crate::android::prepare(&manifest, workspace, &prepared, Some(&target_dir))?;
+    let prepared = staging_directory(package, &target_dir, staging_root)?
+        .join(library)
+        .join(abi);
+    crate::android::prepare(&manifest, &workspace, &prepared, Some(&target_dir))?;
     let key = target.replace('-', "_");
     let mut cargo = Command::new("cargo");
     cargo

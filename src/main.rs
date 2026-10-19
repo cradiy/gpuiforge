@@ -7,6 +7,7 @@ mod devices;
 mod execute;
 mod generate;
 mod host;
+mod info;
 mod logs;
 mod native_build;
 mod schema;
@@ -69,8 +70,25 @@ enum Action {
         platform: Option<String>,
         #[arg(long)]
         device: Option<String>,
+        /// Follow Android application logs after the configured run steps finish.
+        #[arg(long)]
+        logs: bool,
         #[command(flatten)]
         options: build_options::BuildOptions,
+    },
+    /// Show resolved configuration and output paths without building.
+    Info {
+        #[arg(default_value = "android")]
+        platform: String,
+        #[command(flatten)]
+        options: build_options::BuildOptions,
+    },
+    /// Stop and relaunch the installed Android application without building.
+    Restart {
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long)]
+        logs: bool,
     },
     /// Check local build tools and configured project paths.
     Doctor,
@@ -211,12 +229,16 @@ fn run(cli: Cli) -> Result<()> {
         Action::Run {
             platform,
             device,
+            logs,
             options,
         } => {
-            let platform = platform.or_else(|| device.as_ref().map(|_| "android".into()));
+            let platform =
+                platform.or_else(|| (device.is_some() || logs).then(|| "android".into()));
             let name = execute::platform(&project, platform)?;
-            execute::run(&project, &name, &options, device.as_deref())?;
+            execute::run(&project, &name, &options, device.as_deref(), logs)?;
         }
+        Action::Info { platform, options } => info::print(&project, &platform, &options)?,
+        Action::Restart { device, logs } => execute::restart(&project, device.as_deref(), logs)?,
         Action::Doctor => execute::doctor(&project)?,
         Action::Logs { options } => logs::run(&project, &options)?,
         Action::Platform {

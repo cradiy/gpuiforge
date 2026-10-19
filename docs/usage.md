@@ -166,6 +166,42 @@ performed only by those run steps.
 Desktop/Web `run` executes its configured run steps, which must build or serve
 the application as needed. It does not separately execute the build steps.
 
+`gpuiforge run --logs` defaults to Android and follows application logs after all
+configured run steps succeed. The listener reuses the selected device and the
+defaults in `platforms.android.logs`, including the buffered history limit. Build,
+install or launch failures stop execution before logging. `--logs` is rejected
+for Desktop and Web. Log streaming starts after the run steps finish; buffered
+startup records are subject to the device's log retention and configured filters.
+
+`gpuiforge restart` stops and relaunches the installed Android application using
+the configured `application-id` and `activity`. It checks installation for the
+current Android user before stopping the app, preserves application data, and
+does not build, synchronize sources, install an APK or execute configured build
+and run steps. Like `logs`, it accepts any authorized device without checking
+project ABI compatibility. `--device SERIAL` bypasses selection and `--logs`
+follows logs on the same device after a successful launch.
+
+Device selection is repeated for each command; no device choice is persisted.
+While following logs, use Ctrl+C to finish, then invoke the command again to
+select another device or pass a different `--device`.
+
+## Resolved project information
+
+`gpuiforge info android` displays the effective application ID, Activity, enabled
+ABIs, Rust profile, Android build type, signing mode, native project directory,
+Rust staging root and per-ABI prepared project paths, plus the expected artifact
+and whether it exists. `info` defaults to Android; `info desktop` and `info web`
+show the corresponding configuration and artifact information.
+
+The command accepts the same profile, build-type and signing overrides as
+`build`. It does not require signing passwords, access the keystore, select a
+device, generate directories or execute build/run steps. Without an explicit
+`CARGO_TARGET_DIR`, Cargo workspace discovery uses `cargo locate-project`; if
+unavailable, dependent paths are marked unresolved.
+SDK and NDK availability checks belong to `doctor`.
+
+## Build prerequisites
+
 Default managed Android builds check the selected JDK's `java` and `javac`, SDK
 platform 36.1 or later, NDK compilers for `min_sdk`, and Rust standard libraries before
 generating files or starting Gradle. `run` checks the device ABI; `build` checks

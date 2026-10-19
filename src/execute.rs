@@ -227,10 +227,12 @@ pub fn run(
     name: &str,
     options: &BuildOptions,
     device: Option<&str>,
+    follow_logs: bool,
 ) -> Result<()> {
     let platform = project.platform(name)?;
     if name != "android" {
         ensure!(device.is_none(), "--device is only valid for Android");
+        ensure!(!follow_logs, "--logs is only valid for Android");
         ensure!(
             !platform.run.is_empty(),
             "no run steps configured for {name}"
@@ -257,7 +259,7 @@ pub fn run(
         "artifact".into(),
         artifact.to_str().context("APK path must be UTF-8")?.into(),
     );
-    vars.insert("device".into(), device);
+    vars.insert("device".into(), device.clone());
     vars.insert(
         "adb".into(),
         crate::devices::adb()
@@ -265,7 +267,70 @@ pub fn run(
             .context("ADB path must be UTF-8")?
             .into(),
     );
-    steps(project, &platform.run, &vars)
+    steps(project, &platform.run, &vars)?;
+    if follow_logs {
+        let application = platform
+            .application_id
+            .as_deref()
+            .context("android.application-id is required")?;
+        let uid = crate::devices::application_uid(&device, application)?;
+        crate::logs::follow(project, &device, uid)?;
+    }
+    Ok(())
+}
+
+pub fn restart(project: &Project, requested: Option<&str>, follow_logs: bool) -> Result<()> {
+    let platform = project.platform("android")?;
+    let application = platform
+        .application_id
+        .as_deref()
+        .context("android.application-id is required")?;
+    let activity = platform
+        .activity
+        .as_deref()
+        .context("android.activity is required for restart")?;
+    let device = crate::devices::select_for_logs(requested)?;
+    let uid = crate::devices::application_uid(&device, application)?;
+    let adb = crate::devices::adb()
+        .into_os_string()
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("ADB path must be UTF-8"))?;
+    let commands = [
+        vec![
+            "-s".into(),
+            device.clone(),
+            "shell".into(),
+            "am".into(),
+            "force-stop".into(),
+            "--user".into(),
+            "current".into(),
+            application.into(),
+        ],
+        vec![
+            "-s".into(),
+            device.clone(),
+            "shell".into(),
+            "am".into(),
+            "start".into(),
+            "-W".into(),
+            "--user".into(),
+            "current".into(),
+            "-n".into(),
+            format!("{application}/{activity}"),
+        ],
+    ]
+    .map(|args| Step {
+        program: adb.clone(),
+        args,
+        cwd: None,
+        env: Default::default(),
+        error_pattern: Some("Error:".into()),
+    });
+    steps(project, &commands, &Variables::new())?;
+    if follow_logs {
+        crate::logs::follow(project, &device, uid)?;
+    }
+    Ok(())
 }
 
 pub fn doctor(project: &Project) -> Result<()> {

@@ -121,6 +121,35 @@ pub fn list() -> Result<Vec<Device>> {
     Ok(devices)
 }
 
+pub fn application_uid(device: &str, application: &str) -> Result<u32> {
+    let packages = output(&[
+        "-s",
+        device,
+        "shell",
+        "cmd",
+        "package",
+        "list",
+        "packages",
+        "-U",
+        "--user",
+        "current",
+        application,
+    ])
+    .context("querying the installed Android application UID")?;
+    packages
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            if fields.next()?.strip_prefix("package:")? != application {
+                return None;
+            }
+            fields.find_map(|field| field.strip_prefix("uid:")?.parse::<u32>().ok())
+        })
+        .with_context(|| {
+            format!("{application} is not installed for the current Android user on {device}")
+        })
+}
+
 pub fn print() -> Result<()> {
     let devices = list()?;
     if devices.is_empty() {

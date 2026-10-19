@@ -120,46 +120,31 @@ pub fn run(project: &Project, options: &LogOptions) -> Result<()> {
         .application_id
         .as_deref()
         .context("android.application-id is required")?;
-    let output = Command::new(devices::adb())
-        .args([
-            "-s",
-            &device,
-            "shell",
-            "cmd",
-            "package",
-            "list",
-            "packages",
-            "-U",
-            "--user",
-            "current",
-            application,
-        ])
-        .output()
-        .context("querying the installed Android application UID")?;
-    ensure!(
-        output.status.success(),
-        "Android package query failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let packages =
-        String::from_utf8(output.stdout).context("invalid Android package query output")?;
-    let uid = packages
-        .lines()
-        .find_map(|line| {
-            let mut fields = line.split_whitespace();
-            if fields.next()?.strip_prefix("package:")? != application {
-                return None;
-            }
-            fields.find_map(|field| field.strip_prefix("uid:")?.parse::<u32>().ok())
-        })
-        .with_context(|| {
-            format!("{application} is not installed for the current Android user on {device}")
-        })?;
+    let uid = devices::application_uid(&device, application)?;
+    stream(&config, &device, application, uid, options.dump)
+}
+
+pub fn follow(project: &Project, device: &str, uid: u32) -> Result<()> {
+    let platform = project.platform("android")?;
+    stream(
+        &platform.logs.clone().unwrap_or_default(),
+        device,
+        platform
+            .application_id
+            .as_deref()
+            .context("android.application-id is required")?,
+        uid,
+        false,
+    )
+}
+
+fn stream(config: &LogConfig, device: &str, application: &str, uid: u32, dump: bool) -> Result<()> {
+    config.validate()?;
 
     let mut command = Command::new(devices::adb());
     command.args([
         "-s",
-        &device,
+        device,
         "logcat",
         &format!("--uid={uid}"),
         "-b",
@@ -171,7 +156,7 @@ pub fn run(project: &Project, options: &LogOptions) -> Result<()> {
         command.args(["-v", "color"]);
     }
     command.args(["-T", &config.tail.to_string()]);
-    if options.dump {
+    if dump {
         command.arg("-d");
     }
     command.arg("--");
@@ -185,8 +170,8 @@ pub fn run(project: &Project, options: &LogOptions) -> Result<()> {
     }
     eprintln!(
         "{} {application} on {device} (UID {uid}){}",
-        if options.dump { "Dumping" } else { "Following" },
-        if options.dump { "" } else { "; Ctrl+C to stop" },
+        if dump { "Dumping" } else { "Following" },
+        if dump { "" } else { "; Ctrl+C to stop" },
     );
     let interrupted = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&interrupted);
