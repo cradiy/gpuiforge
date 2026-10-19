@@ -63,7 +63,17 @@ pub fn build(
         .unwrap_or_else(|| workspace.join("target"));
     fs::create_dir_all(&target_dir)?;
     let target_dir = crate::host::canonicalize(&target_dir)?;
-    let prepared = target_dir.join("android").join(library).join(abi);
+    // The prepared manifest and its staged sources must live outside `target_dir`.
+    // On Windows the staging routine walks the snapshot and removes entries that no
+    // longer exist, while cargo concurrently reads and writes `target_dir`; nesting
+    // the snapshot inside that tree makes the two fight over the same files and the
+    // build fails with ERROR_LOCK_VIOLATION (os error 33). A sibling directory keeps
+    // the snapshot and the compiler's working set disjoint.
+    let staging_root = target_dir
+        .parent()
+        .map(|parent| parent.join("gpuiforge-staging"))
+        .unwrap_or_else(|| target_dir.join("gpuiforge-staging"));
+    let prepared = staging_root.join(library).join(abi);
     crate::android::prepare(&manifest, workspace, &prepared)?;
     let key = target.replace('-', "_");
     let mut cargo = Command::new("cargo");
