@@ -11,6 +11,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -138,6 +139,12 @@ internal class MediaSession(
                 if (extractionPosition < 0) {
                     current.setAudioAttributes(AudioAttributes.DEFAULT, true)
                     current.setHandleAudioBecomingNoisy(true)
+                    current.trackSelectionParameters = current.trackSelectionParameters.buildUpon()
+                        .setAudioOffloadPreferences(AudioOffloadPreferences.Builder()
+                            .setAudioOffloadMode(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
+                            .setIsGaplessSupportRequired(true)
+                            .build())
+                        .build()
                 }
                 if (extractionPosition >= 0) {
                     current.trackSelectionParameters = current.trackSelectionParameters.buildUpon()
