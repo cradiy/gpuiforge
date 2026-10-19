@@ -2,6 +2,7 @@ mod android;
 mod android_features;
 mod android_tools;
 mod build_options;
+mod clean;
 mod config;
 mod devices;
 mod execute;
@@ -83,6 +84,17 @@ enum Action {
         platform: String,
         #[command(flatten)]
         options: build_options::BuildOptions,
+    },
+    /// Remove managed Android build caches, optionally including Rust staging.
+    Clean {
+        #[arg(default_value = "android", value_parser = ["android"])]
+        platform: String,
+        /// Also remove prepared Rust projects for the current native library.
+        #[arg(long)]
+        staging: bool,
+        /// List directories that would be removed without changing files.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Stop and relaunch the installed Android application without building.
     Restart {
@@ -261,6 +273,11 @@ fn run(cli: Cli) -> Result<()> {
             execute::run(&project, &name, &options, device.as_deref(), logs)?;
         }
         Action::Info { platform, options } => info::print(&project, &platform, &options)?,
+        Action::Clean {
+            platform,
+            staging,
+            dry_run,
+        } => clean::run(&project, &platform, staging, dry_run)?,
         Action::Restart { device, logs } => execute::restart(&project, device.as_deref(), logs)?,
         Action::Launch { device, logs } => execute::launch(&project, device.as_deref(), logs)?,
         Action::Doctor => execute::doctor(&project)?,

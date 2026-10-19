@@ -206,6 +206,29 @@ device, generate directories or execute build/run steps. Without an explicit
 unavailable, dependent paths are marked unresolved.
 SDK and NDK availability checks belong to `doctor`.
 
+## Android cache cleanup
+
+`gpuiforge clean [android]` removes build caches from a managed Android project:
+the root `build`, `.gradle` and `.kotlin` directories and the `build` directories
+beside generated `build.gradle` or `build.gradle.kts` files. Generated sources,
+ownership metadata and Cargo compilation outputs are retained. It does not run
+Gradle or build steps. Cargo is used to locate the workspace target directory
+when an application manifest exists and `CARGO_TARGET_DIR` is unset.
+
+`--staging` also removes the current native library's `arm64-v8a` and `x86_64`
+prepared Rust projects, including architectures no longer enabled in configuration.
+The staging root follows the same configuration, environment and default path
+rules as native builds. Other libraries and the staging root itself are retained.
+Prepared Cargo manifests must identify the current application's source file.
+Direct Gradle overrides such as `-PgpuiStagingRoot` are not discovered by cleanup;
+use the same root in configuration or `GPUIFORGE_STAGING_ROOT`.
+
+Use `--dry-run` to list existing directories without removing anything. All
+ownership and path checks run before deletion begins. Cleanup rejects manually
+managed projects, missing or mismatched ownership metadata, generated source files
+inside cache directories and symlinks in cleanup directory paths. Symlinks inside
+deleted caches or staging snapshots are removed without deleting their targets.
+
 ## Device screenshots
 
 `gpuiforge screenshot [OUTPUT]` saves the selected Android device's current

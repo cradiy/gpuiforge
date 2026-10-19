@@ -1000,3 +1000,277 @@ fn info_resolves_profiles_and_paths_without_side_effects() {
     assert!(!app.0.join("target").exists());
     assert_eq!(fs::read(config_path).unwrap(), before);
 }
+
+#[test]
+fn clean_previews_and_removes_managed_caches_without_touching_sources() {
+    let app = Fixture::new();
+    fs::create_dir(app.0.join("template/engine")).unwrap();
+    fs::write(
+        app.0.join("template/engine/build.gradle.kts.tmpl"),
+        "plugins {}\n",
+    )
+    .unwrap();
+    app.ok(&["generate", "android"]);
+    let generated = app.0.join("target/gpuiforge/android");
+    let source = generated.join("settings.txt");
+    fs::write(&source, "preserve native edits").unwrap();
+    let caches = ["build", ".gradle", ".kotlin", "engine/build"];
+    for cache in caches {
+        let directory = generated.join(cache);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("output"), "cached").unwrap();
+    }
+    let cargo_target = app.0.join("rust-output");
+    fs::create_dir(&cargo_target).unwrap();
+    fs::write(cargo_target.join("compiled"), "retain").unwrap();
+    let before = fs::read(generated.join(".gpuiforge-generated.json")).unwrap();
+    let clean = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+            .args(args)
+            .current_dir(&app.0)
+            .env("CARGO_TARGET_DIR", &cargo_target)
+            .output()
+            .unwrap()
+    };
+    let preview = clean(&["clean", "--dry-run"]);
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let listed = String::from_utf8(preview.stdout).unwrap();
+    for cache in caches {
+        assert!(listed.contains(&generated.join(cache).display().to_string()));
+        assert!(generated.join(cache).join("output").exists());
+    }
+    let output = clean(&["clean", "android"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for cache in caches {
+        assert!(!generated.join(cache).exists());
+    }
+    assert_eq!(fs::read(source).unwrap(), b"preserve native edits");
+    assert_eq!(
+        fs::read(generated.join(".gpuiforge-generated.json")).unwrap(),
+        before
+    );
+    assert!(generated.join("engine/build.gradle.kts").exists());
+    assert_eq!(fs::read(cargo_target.join("compiled")).unwrap(), b"retain");
+    let again = clean(&["clean"]);
+    assert!(again.status.success());
+    assert!(String::from_utf8_lossy(&again.stdout).contains("Nothing to clean"));
+}
+
+#[test]
+fn clean_staging_follows_root_configuration_and_preserves_other_libraries() {
+    let mut app = Fixture::new();
+    app.0 = dunce::canonicalize(&app.0).unwrap();
+    fs::write(
+        app.0.join("Cargo.toml"),
+        "[package]\nname = 'cache-audit'\nversion = '0.1.0'\n[workspace]\n",
+    )
+    .unwrap();
+    fs::create_dir(app.0.join("src")).unwrap();
+    fs::write(app.0.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let config_path = app.0.join("gpuiforge.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["platforms"]["android"]["variables"]["native_library"] = "cache_audit".into();
+    let target = app.0.join("rust-output");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("compiled"), "retain").unwrap();
+    for (setting, root, environment) in [
+        (None, target.join("android"), None),
+        (
+            None,
+            app.0.join("environment-prepared"),
+            Some("environment-prepared"),
+        ),
+        (
+            Some(serde_json::json!("prepared-sources")),
+            app.0.join("prepared-sources"),
+            Some("unused-root"),
+        ),
+        (
+            Some(serde_json::json!(app.0.join("absolute-prepared"))),
+            app.0.join("absolute-prepared"),
+            None,
+        ),
+    ] {
+        if let Some(setting) = setting {
+            config["platforms"]["android"]["staging-root"] = setting;
+        }
+        fs::write(&config_path, config.to_string()).unwrap();
+        app.ok(&["generate", "android"]);
+        let sibling = root.join("other_library/x86_64");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(sibling.join("keep"), "unrelated snapshot").unwrap();
+        for abi in ["arm64-v8a", "x86_64"] {
+            app.ok(&[
+                "prepare-android",
+                "--manifest-path",
+                app.0.join("Cargo.toml").to_str().unwrap(),
+                "--workspace",
+                app.0.to_str().unwrap(),
+                "--output",
+                root.join("cache_audit").join(abi).to_str().unwrap(),
+            ]);
+        }
+        let clean = |preview: bool| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_gpuiforge"));
+            command
+                .args(["clean", "--staging"])
+                .current_dir(&app.0)
+                .env("CARGO_TARGET_DIR", &target)
+                .env_remove("GPUIFORGE_STAGING_ROOT");
+            if let Some(environment) = environment {
+                command.env("GPUIFORGE_STAGING_ROOT", environment);
+            }
+            if preview {
+                command.arg("--dry-run");
+            }
+            command.output().unwrap()
+        };
+        let preview = clean(true);
+        assert!(
+            preview.status.success(),
+            "{}",
+            String::from_utf8_lossy(&preview.stderr)
+        );
+        let text = String::from_utf8(preview.stdout).unwrap();
+        for abi in ["arm64-v8a", "x86_64"] {
+            assert!(text.contains(&root.join("cache_audit").join(abi).display().to_string()));
+            assert!(root.join("cache_audit").join(abi).exists());
+        }
+        let output = clean(false);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!root.join("cache_audit/arm64-v8a").exists());
+        assert!(!root.join("cache_audit/x86_64").exists());
+        assert!(sibling.join("keep").exists());
+        assert_eq!(fs::read(target.join("compiled")).unwrap(), b"retain");
+        assert_eq!(
+            fs::read(app.0.join("src/main.rs")).unwrap(),
+            b"fn main() {}\n"
+        );
+    }
+    let prepared = app.0.join("absolute-prepared/cache_audit/x86_64");
+    app.ok(&[
+        "prepare-android",
+        "--manifest-path",
+        app.0.join("Cargo.toml").to_str().unwrap(),
+        "--workspace",
+        app.0.to_str().unwrap(),
+        "--output",
+        prepared.to_str().unwrap(),
+    ]);
+    let manifest_path = prepared.join("Cargo.toml");
+    let mut manifest: toml::Value =
+        toml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let other_source = app.0.join("neighbor-source.rs");
+    fs::write(&other_source, "fn main() {}\n").unwrap();
+    manifest["lib"]["path"] = toml::Value::String(other_source.display().to_string());
+    fs::write(&manifest_path, toml::to_string(&manifest).unwrap()).unwrap();
+    let cache = app.0.join("target/gpuiforge/android/.gradle");
+    fs::create_dir(&cache).unwrap();
+    fs::write(cache.join("keep"), "cached").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+        .args(["clean", "--staging"])
+        .current_dir(&app.0)
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("GPUIFORGE_STAGING_ROOT")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("does not belong to this application")
+    );
+    assert!(cache.join("keep").exists());
+    assert!(manifest_path.exists());
+    assert!(other_source.exists());
+}
+
+#[test]
+fn clean_rejects_unowned_projects_and_generated_sources_before_deleting() {
+    let app = Fixture::new();
+    app.ok(&["generate", "android"]);
+    let generated = app.0.join("target/gpuiforge/android");
+    fs::create_dir(generated.join(".gradle")).unwrap();
+    fs::write(generated.join(".gradle/keep"), "cached").unwrap();
+    let state_path = generated.join(".gpuiforge-generated.json");
+    let before = fs::read(&state_path).unwrap();
+    let mut state: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    state["owner"] = serde_json::json!(app.0.join("other-project.json"));
+    fs::write(&state_path, state.to_string()).unwrap();
+    assert!(!app.run(&["clean"]).status.success());
+    assert!(generated.join(".gradle/keep").exists());
+    fs::remove_file(&state_path).unwrap();
+    assert!(!app.run(&["clean"]).status.success());
+    fs::write(&state_path, &before).unwrap();
+    let target = generated.join(".gradle/rust-output");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("compiled"), "retain").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+        .arg("clean")
+        .current_dir(&app.0)
+        .env("CARGO_TARGET_DIR", &target)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Cargo target"));
+    assert!(target.join("compiled").exists());
+    assert!(generated.join(".gradle/keep").exists());
+    fs::create_dir(app.0.join("template/build")).unwrap();
+    fs::write(
+        app.0.join("template/build/source.txt.tmpl"),
+        "generated source",
+    )
+    .unwrap();
+    app.ok(&["generate", "android"]);
+    let output = app.run(&["clean"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("generated source files"));
+    assert!(generated.join("build/source.txt").exists());
+    assert!(generated.join(".gradle/keep").exists());
+    let config_path = app.0.join("gpuiforge.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["platforms"]["android"]["management"] = "manual".into();
+    fs::write(config_path, config.to_string()).unwrap();
+    let output = app.run(&["clean", "--staging"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("manually managed"));
+    assert!(generated.join("build/source.txt").exists());
+    assert!(generated.join(".gradle/keep").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_rejects_symlink_paths_and_never_follows_links_inside_caches() {
+    use std::os::unix::fs::symlink;
+    let app = Fixture::new();
+    app.ok(&["generate", "android"]);
+    let generated = app.0.join("target/gpuiforge/android");
+    let outside = app.0.join("unrelated");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), "source").unwrap();
+    fs::create_dir(generated.join(".gradle")).unwrap();
+    fs::write(generated.join(".gradle/cache"), "cached").unwrap();
+    symlink(&outside, generated.join("build")).unwrap();
+    let output = app.run(&["clean"]);
+    assert!(!output.status.success());
+    assert!(generated.join(".gradle/cache").exists());
+    assert!(outside.join("keep").exists());
+    fs::remove_file(generated.join("build")).unwrap();
+    fs::create_dir(generated.join("build")).unwrap();
+    symlink(&outside, generated.join("build/linked-source")).unwrap();
+    app.ok(&["clean"]);
+    assert!(!generated.join("build").exists());
+    assert_eq!(fs::read(outside.join("keep")).unwrap(), b"source");
+}

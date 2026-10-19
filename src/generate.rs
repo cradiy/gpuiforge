@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -102,6 +102,63 @@ pub fn generate(project: &Project, name: &str) -> Result<PathBuf> {
 
 pub fn check(project: &Project, name: &str) -> Result<PathBuf> {
     synchronize(project, name, true)
+}
+
+pub fn build_directories(project: &Project, name: &str) -> Result<Vec<PathBuf>> {
+    let platform = project.platform(name)?;
+    ensure!(
+        platform.management == Management::Managed,
+        "{name} is manually managed; build cache cleanup is disabled"
+    );
+    let directory = project.directory(name)?;
+    no_symlinks(&directory)?;
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let state_path = directory.join(STATE);
+    no_symlinks(&state_path)?;
+    let state: State = serde_json::from_slice(
+        &fs::read(&state_path)
+            .context("build cache cleanup requires matching ownership metadata")?,
+    )?;
+    ensure!(
+        dunce::simplified(&state.owner) == dunce::simplified(&project.config_path),
+        "generated directory belongs to a different project"
+    );
+    let mut paths = BTreeSet::from([
+        PathBuf::from("build"),
+        PathBuf::from(".gradle"),
+        PathBuf::from(".kotlin"),
+    ]);
+    for path in state.files.keys() {
+        relative(path)?;
+        if matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("build.gradle" | "build.gradle.kts")
+        ) {
+            paths.insert(path.parent().unwrap().join("build"));
+        }
+    }
+    for path in &paths {
+        ensure!(
+            !state.files.keys().any(|file| file.starts_with(path)),
+            "refusing to remove generated source files under {}",
+            directory.join(path).display()
+        );
+        let path = directory.join(path);
+        if path.exists() {
+            let canonical = crate::host::canonicalize(&path)?;
+            for file in state.files.keys() {
+                let file = directory.join(file);
+                ensure!(
+                    !file.exists() || !crate::host::canonicalize(&file)?.starts_with(&canonical),
+                    "refusing to remove generated source file {}",
+                    file.display()
+                );
+            }
+        }
+    }
+    Ok(paths.into_iter().map(|path| directory.join(path)).collect())
 }
 
 fn synchronize(project: &Project, name: &str, check: bool) -> Result<PathBuf> {
