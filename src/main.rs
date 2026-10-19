@@ -11,6 +11,7 @@ mod info;
 mod logs;
 mod native_build;
 mod schema;
+mod screenshot;
 include!(concat!(env!("OUT_DIR"), "/android_files.rs"));
 
 use anyhow::{Context, Result, ensure};
@@ -90,10 +91,25 @@ enum Action {
         #[arg(long)]
         logs: bool,
     },
+    /// Start the installed Android application without building or installing.
+    Launch {
+        #[arg(long)]
+        device: Option<String>,
+        /// Follow application logs after a successful launch.
+        #[arg(long)]
+        logs: bool,
+    },
     /// Check local build tools and configured project paths.
     Doctor,
     /// List Android devices, architectures and connection status.
     Devices,
+    /// Save the selected Android device's screen as a local PNG.
+    Screenshot {
+        /// Destination file; defaults to screenshot-<timestamp>.png in the current directory.
+        output: Option<PathBuf>,
+        #[arg(long)]
+        device: Option<String>,
+    },
     /// Follow the configured Android application's logs (Ctrl+C to stop).
     Logs {
         #[command(flatten)]
@@ -181,6 +197,13 @@ fn run(cli: Cli) -> Result<()> {
     if matches!(cli.command, Action::Devices) {
         return devices::print();
     }
+    if let Action::Screenshot { output, device } = cli.command {
+        println!(
+            "{}",
+            screenshot::save(device.as_deref(), output.as_deref())?.display()
+        );
+        return Ok(());
+    }
     if let Action::PrepareAndroid {
         manifest_path,
         workspace,
@@ -239,6 +262,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Action::Info { platform, options } => info::print(&project, &platform, &options)?,
         Action::Restart { device, logs } => execute::restart(&project, device.as_deref(), logs)?,
+        Action::Launch { device, logs } => execute::launch(&project, device.as_deref(), logs)?,
         Action::Doctor => execute::doctor(&project)?,
         Action::Logs { options } => logs::run(&project, &options)?,
         Action::Platform {
@@ -257,6 +281,7 @@ fn run(cli: Cli) -> Result<()> {
         | Action::BuildAndroidNative { .. }
         | Action::Gradle { .. }
         | Action::Devices => unreachable!(),
+        Action::Screenshot { .. } => unreachable!(),
     }
     Ok(())
 }

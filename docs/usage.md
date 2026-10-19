@@ -181,6 +181,12 @@ and run steps. Like `logs`, it accepts any authorized device without checking
 project ABI compatibility. `--device SERIAL` bypasses selection and `--logs`
 follows logs on the same device after a successful launch.
 
+`gpuiforge launch` starts the installed Android application using the same
+identifiers and device selection as `restart`. It leaves the running process
+intact and respects the Activity's launch mode. It does not build or install.
+`--logs` follows the application's logs after launch; `--device SERIAL`
+selects a device explicitly.
+
 Device selection is repeated for each command; no device choice is persisted.
 While following logs, use Ctrl+C to finish, then invoke the command again to
 select another device or pass a different `--device`.
@@ -199,6 +205,21 @@ device, generate directories or execute build/run steps. Without an explicit
 `CARGO_TARGET_DIR`, Cargo workspace discovery uses `cargo locate-project`; if
 unavailable, dependent paths are marked unresolved.
 SDK and NDK availability checks belong to `doctor`.
+
+## Device screenshots
+
+`gpuiforge screenshot [OUTPUT]` saves the selected Android device's current
+screen as a local PNG. It works without a project configuration, requires ADB,
+and accepts `--device SERIAL`. A sole authorized device is selected automatically;
+multiple devices prompt for a selection. Project ABI compatibility is not checked.
+
+OUTPUT is an absolute path or a path relative to the current working directory.
+When omitted, the filename is `screenshot-<seconds>-<nanoseconds>.png`, using the
+current Unix timestamp. The parent directory must exist and existing files are
+never overwritten. The absolute saved path goes to stdout and diagnostics go to
+stderr. The command captures the whole current device screen without starting an
+application. ADB failures, non-PNG output and missing PNG end markers fail before
+creating the destination file.
 
 ## Build prerequisites
 

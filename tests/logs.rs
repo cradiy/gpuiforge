@@ -51,6 +51,11 @@ case "$*" in
   *' install '*) if [ "$PROBE_STATE" = install-failed ]; then exit 4; fi ;;
   *'am force-stop'*) if [ "$PROBE_STATE" = stop-failed ]; then printf 'Error: unable to stop\n'; fi ;;
   *'am start'*) if [ "$PROBE_STATE" = launch-failed ]; then printf 'Error: unable to launch\n'; fi ;;
+  *'exec-out screencap -p'*)
+    if [ "$PROBE_STATE" = capture-failed ]; then printf 'capture unavailable\n' >&2; exit 5; fi
+    if [ "$PROBE_STATE" = capture-invalid ]; then printf 'no image\n'; exit 0; fi
+    if [ "$PROBE_STATE" = capture-truncated ]; then printf '\211PNG\r\n\032\n'; exit 0; fi
+    cat "$PROBE_ROOT/capture-input" ;;
   *logcat*)
     printf '%s\n' "$$" > "$PROBE_ROOT/logcat-pid"
     if [ "$PROBE_STATE" = failed ]; then printf 'transport lost\n' >&2; exit 7; fi
@@ -348,4 +353,104 @@ fn restart_uses_installed_app_without_build_or_abi_selection() {
         assert_eq!(calls.contains("am start"), launched);
         assert!(!calls.contains("logcat"));
     }
+}
+
+#[test]
+fn launch_uses_selected_device_without_stopping_the_application() {
+    let app = App::new();
+    follow_and_interrupt(&app, &["launch", "--logs"]);
+    let calls = app.calls();
+    let launch = calls.find("-s probe-one shell am start -W --user current -n org.forge.logprobe/org.forge.logprobe.EntryActivity").unwrap();
+    let logs = calls.find("-s probe-one logcat --uid=11971").unwrap();
+    assert!(launch < logs);
+    assert!(!calls.contains("force-stop") && !calls.contains("install"));
+    assert_eq!(
+        calls.lines().filter(|line| *line == "devices -l").count(),
+        1
+    );
+    assert!(!app.0.join("target").exists());
+
+    fs::write(app.0.join("calls"), "").unwrap();
+    let output = app
+        .cli(&["launch", "--device", "probe-two"])
+        .env("PROBE_STATE", "multiple")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let calls = app.calls();
+    assert!(calls.contains("-s probe-two shell am start"));
+    assert!(!calls.contains("force-stop") && !calls.contains("logcat"));
+
+    for state in ["missing", "launch-failed"] {
+        fs::write(app.0.join("calls"), "").unwrap();
+        let output = app
+            .cli(&["launch", "--logs"])
+            .env("PROBE_STATE", state)
+            .env("PROBE_LOGCAT_ONCE", "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let calls = app.calls();
+        assert_eq!(calls.contains("am start"), state == "launch-failed");
+        assert!(!calls.contains("force-stop") && !calls.contains("logcat"));
+    }
+}
+
+#[test]
+fn screenshot_preserves_png_bytes_without_project_configuration() {
+    let app = App::new();
+    fs::remove_file(app.0.join("gpuiforge.json")).unwrap();
+    let png = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x02\x00\x00\x00\x01\x08\x06\x00\x00\x00\xf4\x22\x7f\x8a\x00\x00\x00\x11\x49\x44\x41\x54\x78\x9c\x63\x10\x32\x09\xfb\xbf\x6a\xf7\x19\x06\x00\x0f\x75\x03\xcd\x28\xd7\x65\x49\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
+    fs::write(app.0.join("capture-input"), png).unwrap();
+    let output = app
+        .cli(&["screenshot", "--config", "missing.json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let saved = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    assert_eq!(
+        saved.parent().unwrap(),
+        dunce::canonicalize(&app.0).unwrap()
+    );
+    assert_eq!(fs::read(&saved).unwrap(), png);
+    assert!(app.calls().contains("-s probe-one exec-out screencap -p"));
+
+    fs::write(app.0.join("calls"), "").unwrap();
+    let destination = app.0.join("screen selected.png");
+    let output = app
+        .cli(&["screenshot", "--device", "probe-two"])
+        .arg(&destination)
+        .env("PROBE_STATE", "multiple")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(fs::read(&destination).unwrap(), png);
+    assert!(app.calls().contains("-s probe-two exec-out screencap -p"));
+}
+
+#[test]
+fn screenshot_failures_leave_no_image_and_preserve_existing_files() {
+    let app = App::new();
+    let destination = app.0.join("capture.png");
+    for state in ["capture-failed", "capture-invalid", "capture-truncated"] {
+        let output = app
+            .cli(&["screenshot"])
+            .arg(&destination)
+            .env("PROBE_STATE", state)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!destination.exists());
+    }
+    fs::write(&destination, "keep existing content").unwrap();
+    fs::write(app.0.join("calls"), "").unwrap();
+    let output = app.cli(&["screenshot"]).arg(&destination).output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&destination).unwrap(), b"keep existing content");
+    assert!(app.calls().is_empty());
 }

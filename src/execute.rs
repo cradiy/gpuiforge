@@ -280,6 +280,19 @@ pub fn run(
 }
 
 pub fn restart(project: &Project, requested: Option<&str>, follow_logs: bool) -> Result<()> {
+    launch_application(project, requested, follow_logs, true)
+}
+
+pub fn launch(project: &Project, requested: Option<&str>, follow_logs: bool) -> Result<()> {
+    launch_application(project, requested, follow_logs, false)
+}
+
+fn launch_application(
+    project: &Project,
+    requested: Option<&str>,
+    follow_logs: bool,
+    restart: bool,
+) -> Result<()> {
     let platform = project.platform("android")?;
     let application = platform
         .application_id
@@ -288,7 +301,7 @@ pub fn restart(project: &Project, requested: Option<&str>, follow_logs: bool) ->
     let activity = platform
         .activity
         .as_deref()
-        .context("android.activity is required for restart")?;
+        .context("android.activity is required to launch the application")?;
     let device = crate::devices::select_for_logs(requested)?;
     let uid = crate::devices::application_uid(&device, application)?;
     let adb = crate::devices::adb()
@@ -319,13 +332,16 @@ pub fn restart(project: &Project, requested: Option<&str>, follow_logs: bool) ->
             format!("{application}/{activity}"),
         ],
     ]
+    .into_iter()
+    .skip(if restart { 0 } else { 1 })
     .map(|args| Step {
         program: adb.clone(),
         args,
         cwd: None,
         env: Default::default(),
         error_pattern: Some("Error:".into()),
-    });
+    })
+    .collect::<Vec<_>>();
     steps(project, &commands, &Variables::new())?;
     if follow_logs {
         crate::logs::follow(project, &device, uid)?;
