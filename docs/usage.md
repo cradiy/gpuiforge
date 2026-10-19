@@ -292,6 +292,7 @@ logcat failures end the command with an error.
 | `--tag TAG` | Include an exact tag; repeat for multiple tags |
 | `--tail N` | Positive logcat history limit |
 | `--dump` | Print buffered logs and exit instead of following |
+| `--crash` | Select Java/native crash reports by application process name |
 
 Optional defaults belong in `platforms.android.logs`: `level` (default `debug`),
 `tail` (default `100`) and `tags` (default an empty array, including all tags).
@@ -299,6 +300,25 @@ CLI options override configuration; any `--tag` options replace the configured
 tag list. Tags must be nonempty and contain no whitespace, control characters,
 colons or asterisks. These settings also work with custom recipes and manually
 maintained Android projects. They do not require synchronizing native sources.
+
+`gpuiforge logs --crash` reads the retained crash buffer and continues listening;
+add `--dump` to print it once and exit. This mode includes standard `AndroidRuntime`
+Java reports and `DEBUG` native reports, including native reports written by
+system crash reporters. It matches the configured application ID exactly or with
+a `:process` suffix, retaining the associated report headers and stack frames.
+Matching a package name in an arbitrary stack frame does not select a report.
+
+Crash mode ignores the configured log level, tags and history limit, requests all
+priorities and uses plain text output. Explicit `--level` and `--tag` options
+conflict with `--crash`. `--tail N` can limit the device history before report
+filtering; a small limit can omit an identifying header and hide that report.
+
+Crash selection uses process names rather than the log writer's UID. Reports for
+the same package in other Android user profiles can appear; custom process names
+outside the application ID and its `:process` suffixes are excluded. Reports
+without recognized identifying headers, including truncated history and vendor
+formats, may be omitted. Only retained logcat content is available: this does not
+retrieve complete tombstone files, symbolize native addresses or diagnose ANRs.
 
 ## Android host features and icons
 

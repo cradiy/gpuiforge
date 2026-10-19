@@ -23,6 +23,7 @@ restarts an installed Android application and follows its logs.
 `gpuiforge launch` starts the installed Android application without rebuilding;
 `gpuiforge screenshot` saves the selected device's screen as a local PNG.
 `gpuiforge clean android --dry-run` previews managed Android cache cleanup.
+`gpuiforge logs --crash --dump` displays retained Java/native crash reports.
 See [configuration and workflows](docs/usage.md) for setup and project ownership.
 
 ## License

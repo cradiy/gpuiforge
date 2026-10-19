@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Args, ValueEnum};
 use serde::Deserialize;
 use std::{
-    io::{self, IsTerminal},
+    io::{self, BufReader, IsTerminal},
     process::{Command, Stdio},
     sync::{
         Arc,
@@ -11,6 +11,8 @@ use std::{
     },
     time::Duration,
 };
+
+mod crash;
 
 #[derive(Clone, Copy, Default, Deserialize, schemars::JsonSchema, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -80,12 +82,15 @@ pub struct LogOptions {
     /// Include only this exact tag; repeat to select multiple tags.
     #[arg(long = "tag", value_parser = validate_tag)]
     tags: Vec<String>,
-    /// Logcat history limit (default: configured tail or 100).
+    /// Logcat history limit (ordinary logs: configured tail or 100; crash: all).
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     tail: Option<u32>,
     /// Print buffered logs and exit instead of following.
     #[arg(long)]
     dump: bool,
+    /// Show Java/native crash reports for this application's process names.
+    #[arg(long, conflicts_with_all = ["level", "tags"])]
+    crash: bool,
 }
 
 fn validate_tag(tag: &str) -> std::result::Result<String, String> {
@@ -121,6 +126,9 @@ pub fn run(project: &Project, options: &LogOptions) -> Result<()> {
         .as_deref()
         .context("android.application-id is required")?;
     let uid = devices::application_uid(&device, application)?;
+    if options.crash {
+        return crashes(&device, application, options.tail, options.dump);
+    }
     stream(&config, &device, application, uid, options.dump)
 }
 
@@ -173,11 +181,36 @@ fn stream(config: &LogConfig, device: &str, application: &str, uid: u32, dump: b
         if dump { "Dumping" } else { "Following" },
         if dump { "" } else { "; Ctrl+C to stop" },
     );
+    listen(command, None)
+}
+
+fn crashes(device: &str, application: &str, tail: Option<u32>, dump: bool) -> Result<()> {
+    let mut command = Command::new(devices::adb());
+    command.args(["-s", device, "logcat", "-b", "crash", "-v", "threadtime"]);
+    if let Some(tail) = tail {
+        command.args(["-T", &tail.to_string()]);
+    }
+    if dump {
+        command.arg("-d");
+    }
+    command.args(["--", "*:V"]);
+    eprintln!(
+        "{} crash reports for {application} on {device}{}",
+        if dump { "Dumping" } else { "Following" },
+        if dump { "" } else { "; Ctrl+C to stop" },
+    );
+    listen(command, Some(application))
+}
+
+fn listen(mut command: Command, crash_application: Option<&str>) -> Result<()> {
     let interrupted = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&interrupted);
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
         .context("installing the log interrupt handler")?;
     command.stdin(Stdio::null());
+    if crash_application.is_some() {
+        command.stdout(Stdio::piped());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -190,23 +223,48 @@ fn stream(config: &LogConfig, device: &str, application: &str, uid: u32, dump: b
         command.creation_flags(CREATE_NEW_PROCESS_GROUP);
     }
     let mut child = command.spawn().context("starting adb logcat")?;
-    loop {
-        if interrupted.load(Ordering::Relaxed) {
+    let output_failed = Arc::new(AtomicBool::new(false));
+    let output = crash_application.map(|application| {
+        let application = application.to_owned();
+        let stdout = child.stdout.take().unwrap();
+        let failed = Arc::clone(&output_failed);
+        std::thread::spawn(move || {
+            let result = crash::filter(BufReader::new(stdout), &application, io::stdout().lock());
+            if result.is_err() {
+                failed.store(true, Ordering::Relaxed);
+            }
+            result
+        })
+    });
+    let result = loop {
+        if interrupted.load(Ordering::Relaxed) || output_failed.load(Ordering::Relaxed) {
             let _ = child.kill();
-            child.wait().context("waiting for adb logcat to stop")?;
-            return Ok(());
+            break child
+                .wait()
+                .context("waiting for adb logcat to stop")
+                .map(|_| ());
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                ensure!(status.success(), "adb logcat failed: {status}");
-                return Ok(());
+                break if status.success() {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("adb logcat failed: {status}"))
+                };
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error).context("waiting for adb logcat");
+                break Err(error).context("waiting for adb logcat");
             }
         }
+    };
+    if let Some(output) = output {
+        output
+            .join()
+            .map_err(|_| anyhow::anyhow!("crash log reader panicked"))?
+            .context("filtering crash reports")?;
     }
+    result
 }

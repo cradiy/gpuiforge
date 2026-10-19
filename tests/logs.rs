@@ -59,7 +59,10 @@ case "$*" in
   *logcat*)
     printf '%s\n' "$$" > "$PROBE_ROOT/logcat-pid"
     if [ "$PROBE_STATE" = failed ]; then printf 'transport lost\n' >&2; exit 7; fi
-    printf 'listener output\n'
+    case " $* " in
+      *' -b crash '*) cat "$PROBE_ROOT/crash-input" || exit 6 ;;
+      *) printf 'listener output\n' ;;
+    esac
     if [ "$PROBE_LOGCAT_ONCE" = 1 ]; then exit 0; fi
     case " $* " in *' -d '*) exit 0 ;; esac
     exec sleep 30 ;;
@@ -201,6 +204,228 @@ fn logs_reject_unavailable_scope_and_report_logcat_failures() {
 fn logs_stream_before_exit_and_interrupt_reaps_the_listener() {
     let app = App::new();
     follow_and_interrupt(&app, &["logs"]);
+}
+
+#[test]
+fn crash_reports_preserve_native_and_java_stacks_without_prefix_matches() {
+    let app = App::new();
+    let line = |pid, tid, tag, message| {
+        format!("04-16 09:13:27.321 {pid:5} {tid:5} F {tag:<14}: {message}\n")
+    };
+    let native_header = [
+        line(840, 841, "DEBUG", "*** *** *** *** *** *** *** ***"),
+        line(840, 841, "DEBUG", "Build fingerprint: 'crash-testbed'"),
+    ]
+    .concat();
+    let native_stack = [
+        line(840, 841, "DEBUG", "Cmdline: org.forge.logprobe"),
+        line(
+            840,
+            841,
+            "DEBUG",
+            "pid: 620, tid: 625, name: render >>> org.forge.logprobe <<<",
+        ),
+        line(840, 841, "DEBUG", "uid: 11971"),
+        line(840, 841, "DEBUG", "signal 6 (SIGABRT), code -1"),
+        line(
+            840,
+            841,
+            "DEBUG",
+            "    #00 pc 0000000000000234 /system/lib64/libc.so",
+        ),
+    ]
+    .concat();
+    let foreign_java = [
+        line(710, 712, "AndroidRuntime", "FATAL EXCEPTION: pool"),
+        line(
+            710,
+            712,
+            "AndroidRuntime",
+            "Process: org.forge.logprobe.helper, PID: 710",
+        ),
+        line(
+            710,
+            712,
+            "AndroidRuntime",
+            "java.lang.IllegalStateException: mentions org.forge.logprobe",
+        ),
+    ]
+    .concat();
+    let java = [
+        line(720, 722, "AndroidRuntime", "FATAL EXCEPTION: work"),
+        line(
+            720,
+            722,
+            "AndroidRuntime",
+            "Process: org.forge.logprobe:worker, PID: 720",
+        ),
+        line(
+            720,
+            722,
+            "AndroidRuntime",
+            "java.lang.UnsupportedOperationException: unavailable",
+        ),
+        line(
+            720,
+            722,
+            "AndroidRuntime",
+            "    at runtime.Worker.execute(Worker.java:57)",
+        ),
+    ]
+    .concat();
+    let reused = [
+        line(840, 841, "DEBUG", "*** *** *** *** *** *** *** ***"),
+        line(
+            840,
+            841,
+            "DEBUG",
+            "pid: 630, tid: 631, name: worker >>> org.forge.logprobe.extra <<<",
+        ),
+        line(840, 841, "DEBUG", "foreign native stack"),
+        line(720, 722, "AndroidRuntime", "FATAL EXCEPTION: worker"),
+        line(
+            720,
+            722,
+            "AndroidRuntime",
+            "Process: org.forge.logprobe.other, PID: 720",
+        ),
+        line(720, 722, "AndroidRuntime", "foreign Java stack"),
+    ]
+    .concat();
+    let legacy = [
+        line(840, 841, "DEBUG", "*** *** *** *** *** *** *** ***"),
+        line(840, 841, "DEBUG", "ABI: 'arm64'"),
+        line(
+            840,
+            841,
+            "DEBUG",
+            "pid: 640, tid: 642, name: background >>> org.forge.logprobe:background <<<",
+        ),
+        line(
+            840,
+            841,
+            "DEBUG",
+            "    #00 pc 0000000000000468 /system/lib64/libc.so",
+        ),
+    ]
+    .concat();
+    let mut input = [
+        "--------- beginning of crash\n".into(),
+        line(
+            810,
+            811,
+            "DEBUG",
+            "orphan stack mentions org.forge.logprobe",
+        ),
+        native_header.clone(),
+        foreign_java,
+        native_stack.clone(),
+        java.clone(),
+        reused,
+        legacy.clone(),
+    ]
+    .concat()
+    .into_bytes();
+    let mut binary = line(840, 841, "DEBUG", "stack byte: ").into_bytes();
+    binary.pop();
+    binary.push(0xff);
+    input.extend(&binary);
+    fs::write(app.0.join("crash-input"), input).unwrap();
+    let output = app.command(&["--crash", "--dump"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut expected = [native_header, native_stack, java, legacy]
+        .concat()
+        .into_bytes();
+    expected.extend(binary);
+    assert_eq!(output.stdout, expected);
+    let calls = app.calls();
+    assert!(calls.contains("logcat -b crash -v threadtime -d -- *:V"));
+    assert!(!calls.contains("--uid") && !calls.contains("--pid"));
+    assert!(!calls.contains("-T") && !calls.contains("Scheduler"));
+    assert!(!app.0.join("target").exists());
+    fs::write(app.0.join("calls"), "").unwrap();
+    assert!(
+        app.command(&["--crash", "--dump", "--tail", "250"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(app.calls().contains("-T 250 -d -- *:V"));
+    for args in [
+        vec!["--crash", "--level", "fatal"],
+        vec!["--crash", "--tag", "DEBUG"],
+    ] {
+        fs::write(app.0.join("calls"), "").unwrap();
+        assert!(!app.command(&args).output().unwrap().status.success());
+        assert!(app.calls().is_empty());
+    }
+}
+
+#[test]
+fn crash_streaming_flushes_before_exit_and_interrupt_reaps_the_listener() {
+    let app = App::new();
+    fs::write(
+        app.0.join("crash-input"),
+        "04-16 09:13:27.321  1010  1011 E AndroidRuntime: FATAL EXCEPTION: main\n\
+         04-16 09:13:27.322  1010  1011 E AndroidRuntime: Process: org.forge.logprobe, PID: 1010\n\
+         04-16 09:13:27.323  1010  1011 E AndroidRuntime: listener output\n",
+    )
+    .unwrap();
+    follow_and_interrupt(&app, &["logs", "--crash"]);
+    let calls = app.calls();
+    assert!(calls.contains("-b crash"));
+    assert!(!calls.contains("--uid"));
+    let failed = app
+        .command(&["--crash", "--dump"])
+        .env("PROBE_STATE", "failed")
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("adb logcat failed"));
+    #[cfg(target_os = "linux")]
+    {
+        let full = fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let mut listener = Listener(
+            app.command(&["--crash"])
+                .stdout(full)
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = listener.0.try_wait().unwrap() {
+                assert!(!status.success(), "output errors must fail the listener");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "output error did not stop logcat"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = fs::read_to_string(app.0.join("logcat-pid")).unwrap();
+        assert!(
+            !Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fs::write(app.0.join("crash-input"), "").unwrap();
+    let empty = app.command(&["--crash", "--dump"]).output().unwrap();
+    assert!(empty.status.success());
+    assert!(empty.stdout.is_empty());
 }
 
 fn follow_and_interrupt(app: &App, args: &[&str]) {
