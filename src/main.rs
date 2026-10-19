@@ -239,17 +239,20 @@ fn run(cli: Cli) -> Result<()> {
     }
     let project = Project::load(&cli.config)?;
     match cli.command {
-        Action::Sync {
-            platform,
-            check: true,
-        } => {
-            println!("{}", generate::check(&project, &platform)?.display())
+        Action::Sync { platform, check } => {
+            let directory = if check {
+                generate::check(&project, &platform)?
+            } else {
+                generate::generate(&project, &platform)?
+            };
+            if check {
+                println!("{platform} project is up to date");
+            } else {
+                println!("Synchronized {platform} project");
+            }
+            println!("  Directory: {}", directory.display());
         }
-        Action::Generate { platform }
-        | Action::Sync {
-            platform,
-            check: false,
-        } => {
+        Action::Generate { platform } => {
             println!("{}", generate::generate(&project, &platform)?.display())
         }
         Action::Build {

@@ -413,6 +413,8 @@ It regenerates the managed project without building or requiring an Android SDK,
 and removes previously generated files for disabled features or removed icons.
 Build and run also synchronize managed projects automatically.
 Use `gpuiforge sync --check` to check without writing files or starting Gradle.
+Successful `sync` output reports completion and the project directory;
+`sync --check` reports that the project is up to date.
 It exits with 0 when the managed project matches the current configuration and
 bundled templates, or 1 with the paths that need creation, updating or removal.
 An absent generated project also needs synchronization. Modified generated files
