@@ -69,6 +69,8 @@ pub struct Platform {
     pub template: Option<PathBuf>,
     /// Native project directory, always relative to the application's configuration directory, even when declared in a recipe. Defaults to target/gpuiforge/<platform>. Must be nonempty and contain no . or .. components. Managed generation never adopts a nonempty directory without matching ownership metadata.
     pub project_dir: Option<PathBuf>,
+    /// Android Rust source staging root. Relative paths resolve from the declaring configuration or recipe. Defaults to <Cargo target directory>/android. Prepared projects live under <staging-root>/<native library>/<ABI>. Use a separate root for each application. Does not move compiled artifacts.
+    pub staging_root: Option<PathBuf>,
     /// Custom string values exposed as {{var.<name>}} in templates and process steps. Values are strings, including SDK levels and version codes. Application values override individual recipe keys. Bundled Android templates recognize the documented SDK, version and native_library keys; arbitrary additional keys are allowed.
     #[serde(default)]
     pub variables: BTreeMap<String, String>,
@@ -222,6 +224,13 @@ fn paths(value: &mut serde_json::Value, base: &Path) -> Result<()> {
         if let Some(path) = value.get_mut(field) {
             resolve(path, base)?;
         }
+    }
+    if let Some(path) = value.get_mut("staging-root") {
+        ensure!(
+            path.as_str().is_some_and(|path| !path.trim().is_empty()),
+            "staging-root must be a nonempty path string"
+        );
+        resolve(path, base)?;
     }
     if let Some(template) = value.get_mut("template") {
         resolve(template, base)?;
@@ -523,6 +532,10 @@ impl Project {
                     "features, icons, cleartext settings, inset-handling, permissions, signing, url-schemes and share-mime-types are Android-only settings"
                 );
                 ensure!(platform.logs.is_none(), "logs is an Android-only setting");
+                ensure!(
+                    platform.staging_root.is_none(),
+                    "staging-root is an Android-only setting"
+                );
             }
             if let Some(profile) = &platform.rust_profile {
                 crate::build_options::validate_rust_profile(profile)?;
@@ -591,6 +604,13 @@ impl Project {
                 selection.android_build_type.variant().into(),
             ),
             ("signing_mode".into(), selection.signing.name().into()),
+            (
+                "staging_root".into(),
+                p.staging_root
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+            ),
             (
                 "abis".into(),
                 abi.map(str::to_owned).unwrap_or_else(|| p.abis.join(",")),

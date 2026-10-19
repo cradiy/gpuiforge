@@ -11,6 +11,7 @@ pub fn text(recipe: bool) -> Result<String> {
     properties.get_mut("rust-profile").unwrap()["pattern"] = "^[A-Za-z0-9_-]+$".into();
     properties.get_mut("build-type").unwrap()["default"] = "debug".into();
     properties.get_mut("signing-mode").unwrap()["default"] = "auto".into();
+    properties.get_mut("staging-root").unwrap()["pattern"] = "\\S".into();
     properties.get_mut("abis").unwrap()["items"] = json!({"oneOf":[
         {"type":"string", "const":"arm64-v8a", "description":"64-bit ARM Android devices. Uses Rust target aarch64-linux-android; commonly used for physical phones and ARM emulators."},
         {"type":"string", "const":"x86_64", "description":"64-bit x86 Android devices or emulators. Uses Rust target x86_64-linux-android; select it for an x86_64 emulator."}
@@ -108,6 +109,7 @@ pub fn text(recipe: bool) -> Result<String> {
         "abis",
         "application-id",
         "logs",
+        "staging-root",
         "activity",
     ] {
         commands["properties"].as_object_mut().unwrap().remove(name);

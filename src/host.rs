@@ -123,7 +123,7 @@ fn remove_snapshot(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn stage_package(package: &Path, output: &Path) -> Result<()> {
+pub fn stage_package(package: &Path, output: &Path, target_dir: Option<&Path>) -> Result<()> {
     #[cfg(not(unix))]
     let mut staged = std::collections::BTreeSet::new();
     for entry in fs::read_dir(package)? {
@@ -136,7 +136,9 @@ pub fn stage_package(package: &Path, output: &Path) -> Result<()> {
         ) {
             continue;
         }
-        if output.starts_with(entry.path()) {
+        if output.starts_with(entry.path())
+            || target_dir.is_some_and(|target| target.starts_with(entry.path()))
+        {
             continue;
         }
         let dest = output.join(entry.file_name());

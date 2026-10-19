@@ -17,6 +17,9 @@ require(gpuiAbis.isNotEmpty() && gpuiAbis.all { it == "arm64-v8a" || it == "x86_
 
 val gpuiRustProfile = providers.gradleProperty("gpuiRustProfile")
     .orElse(providers.environmentVariable("GPUIFORGE_RUST_PROFILE"))
+val gpuiStagingRoot = providers.gradleProperty("gpuiStagingRoot")
+    .orElse(providers.environmentVariable("GPUIFORGE_STAGING_ROOT"))
+    .getOrElse("{{staging_root|kotlin}}")
 val gpuiSigningMode = providers.gradleProperty("gpuiSigning")
     .orElse(providers.environmentVariable("GPUIFORGE_SIGNING_MODE")).getOrElse("auto")
 require(gpuiSigningMode in listOf("auto", "debug", "configured", "unsigned")) {
@@ -78,6 +81,7 @@ for (profile in listOf("debug", "release")) {
                 "--manifest-path", "{{app_dir|kotlin}}/Cargo.toml",
                 "--library", "{{var.native_library|kotlin}}", "--abi", abi,
                 "--profile", rustProfile, "--min-sdk", "{{var.min_sdk|kotlin}}")
+            if (gpuiStagingRoot.isNotEmpty()) args("--staging-root", gpuiStagingRoot)
         }
     }
     tasks.matching { it.name == "pre${variant}Build" }.configureEach { dependsOn(rustBuilds) }

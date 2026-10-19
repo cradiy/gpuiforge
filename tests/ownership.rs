@@ -146,6 +146,7 @@ fn bundled_android_generates_without_recipe_or_checkout() {
     assert!(activity.contains("InsetHandling.APPLICATION"));
     let mut config = config;
     config["platforms"]["android"]["inset-handling"] = "host".into();
+    config["platforms"]["android"]["staging-root"] = "native prep $cache".into();
     fs::write(
         app.0.join("gpuiforge.json"),
         serde_json::to_vec(&config).unwrap(),
@@ -156,6 +157,13 @@ fn bundled_android_generates_without_recipe_or_checkout() {
         fs::read_to_string(generated.join("app/src/main/kotlin/dev/gpuiforge/app/MainActivity.kt"))
             .unwrap();
     assert!(activity.contains("InsetHandling.HOST"));
+    let gradle = fs::read_to_string(generated.join("app/build.gradle.kts")).unwrap();
+    let configured_root = dunce::canonicalize(&app.0)
+        .unwrap()
+        .join("native prep $cache");
+    let quoted = serde_json::to_string(&configured_root.display().to_string()).unwrap();
+    assert!(gradle.contains(&format!(".getOrElse({})", quoted.replace('$', "\\$"))));
+    assert!(gradle.contains("args(\"--staging-root\", gpuiStagingRoot)"));
     let host = generated.join("host/src/main/kotlin/dev/gpui/android/GpuiActivity.kt");
     fs::write(&host, "user-owned host").unwrap();
     assert!(!app.run(&["generate", "android"]).status.success());
@@ -758,4 +766,148 @@ fn build_selection_reaches_commands_and_rejects_missing_signing_credentials() {
         );
         fs::write(&trace, "").unwrap();
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_staging_uses_configured_paths_and_excludes_cargo_outputs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut app = Fixture::new();
+    app.0 = dunce::canonicalize(&app.0).unwrap();
+    fs::write(
+        app.0.join("Cargo.toml"),
+        "[package]\nname = 'stage-probe'\nversion = '0.1.0'\n[workspace]\n",
+    )
+    .unwrap();
+    fs::create_dir(app.0.join("src")).unwrap();
+    fs::write(app.0.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let bin = app.0.join("tools/bin");
+    let stdlib = app.0.join("tools/stdlib");
+    let ndk = app.0.join("tools/ndk");
+    let ndk_bin = ndk.join(format!(
+        "toolchains/llvm/prebuilt/{}-x86_64/bin",
+        if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "linux"
+        }
+    ));
+    for path in [&bin, &stdlib, &ndk_bin] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(stdlib.join("libstd-probe.rlib"), "").unwrap();
+    for (path, source) in [
+        (
+            bin.join("cargo"),
+            r#"#!/bin/sh
+case "$1" in
+  locate-project) printf '%s\n' "$STAGING_PROBE_WORKSPACE/Cargo.toml" ;;
+  rustc)
+    shift
+    test "$1" = --manifest-path || exit 9
+    printf '%s\n' "$2" > "$STAGING_PROBE_WORKSPACE/native-manifest"
+    mkdir -p "$CARGO_TARGET_DIR/x86_64-linux-android/debug"
+    printf compiled > "$CARGO_TARGET_DIR/x86_64-linux-android/debug/libstage_probe.so" ;;
+  *) exit 9 ;;
+esac
+"#,
+        ),
+        (
+            bin.join("rustc"),
+            "#!/bin/sh\nprintf '%s\\n' \"$STAGING_PROBE_WORKSPACE/tools/stdlib\"\n",
+        ),
+        (
+            ndk_bin.join("x86_64-linux-android26-clang"),
+            "#!/bin/sh\nexit 0\n",
+        ),
+        (
+            ndk_bin.join("x86_64-linux-android26-clang++"),
+            "#!/bin/sh\nexit 0\n",
+        ),
+        (ndk_bin.join("llvm-ar"), "#!/bin/sh\nexit 0\n"),
+    ] {
+        fs::write(&path, source).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut path_entries = vec![bin];
+    path_entries.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let path = std::env::join_paths(path_entries).unwrap();
+    let cargo_target = app.0.join("compiler-cache");
+    fs::create_dir(&cargo_target).unwrap();
+    fs::write(cargo_target.join("artifact-marker"), "compile output").unwrap();
+    let config_path = app.0.join("gpuiforge.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    config["platforms"]["android"]["build"] = serde_json::json!([{
+        "program": "{{tool_path}}",
+        "args": ["build-android-native", "--manifest-path", "{{app_dir}}/Cargo.toml",
+            "--output", "{{project_dir}}/jni", "--library", "stage_probe", "--abi", "x86_64"]
+    }]);
+    for (setting, expected_root) in [
+        (None, cargo_target.join("android")),
+        (
+            Some(serde_json::json!("native workspace")),
+            app.0.join("native workspace"),
+        ),
+        (
+            Some(serde_json::json!(app.0.join("absolute staging"))),
+            app.0.join("absolute staging"),
+        ),
+    ] {
+        if let Some(setting) = setting {
+            config["platforms"]["android"]["staging-root"] = setting;
+        }
+        fs::write(&config_path, config.to_string()).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+            .args(["build", "android"])
+            .current_dir(&app.0)
+            .env("PATH", &path)
+            .env("ANDROID_NDK_HOME", &ndk)
+            .env("CARGO_TARGET_DIR", &cargo_target)
+            .env("STAGING_PROBE_WORKSPACE", &app.0)
+            .env_remove("GPUIFORGE_STAGING_ROOT")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let prepared = expected_root.join("stage_probe/x86_64");
+        assert_eq!(
+            fs::read_to_string(app.0.join("native-manifest"))
+                .unwrap()
+                .trim(),
+            prepared.join("Cargo.toml").to_str().unwrap()
+        );
+        assert!(prepared.join("src/main.rs").is_file());
+        assert!(!prepared.join("compiler-cache").exists());
+        assert_eq!(
+            fs::read(
+                app.0
+                    .join("target/gpuiforge/android/jni/x86_64/libstage_probe.so")
+            )
+            .unwrap(),
+            b"compiled"
+        );
+    }
+    config["platforms"]["android"]["staging-root"] = "blocked".into();
+    fs::write(&config_path, config.to_string()).unwrap();
+    fs::remove_file(app.0.join("native-manifest")).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_gpuiforge"))
+        .args(["build", "android"])
+        .current_dir(&app.0)
+        .env("PATH", &path)
+        .env("ANDROID_NDK_HOME", &ndk)
+        .env(
+            "CARGO_TARGET_DIR",
+            app.0.join("blocked/stage_probe/x86_64/cache"),
+        )
+        .env("STAGING_PROBE_WORKSPACE", &app.0)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("staging output must not contain"));
+    assert!(!app.0.join("native-manifest").exists());
 }

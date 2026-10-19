@@ -23,6 +23,7 @@ pub fn build(
     abi: &str,
     profile: &str,
     api: u32,
+    staging_root: Option<&Path>,
 ) -> Result<()> {
     ensure!(
         library.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
@@ -61,8 +62,16 @@ pub fn build(
         .unwrap_or_else(|| workspace.join("target"));
     fs::create_dir_all(&target_dir)?;
     let target_dir = crate::host::canonicalize(&target_dir)?;
-    let prepared = target_dir.join("android").join(library).join(abi);
-    crate::android::prepare(&manifest, workspace, &prepared)?;
+    let staging_root = staging_root
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("GPUIFORGE_STAGING_ROOT").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| target_dir.join("android"));
+    ensure!(
+        !staging_root.as_os_str().is_empty(),
+        "staging root must not be empty"
+    );
+    let prepared = package.join(staging_root).join(library).join(abi);
+    crate::android::prepare(&manifest, workspace, &prepared, Some(&target_dir))?;
     let key = target.replace('-', "_");
     let mut cargo = Command::new("cargo");
     cargo

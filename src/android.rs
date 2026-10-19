@@ -67,7 +67,12 @@ fn dependencies(table: &mut Table, workspace: &Table, root: &Path, package: &Pat
     Ok(())
 }
 
-pub fn prepare(manifest_path: &Path, workspace_path: &Path, output: &Path) -> Result<()> {
+pub fn prepare(
+    manifest_path: &Path,
+    workspace_path: &Path,
+    output: &Path,
+    target_dir: Option<&Path>,
+) -> Result<()> {
     let manifest_path = crate::host::canonicalize(manifest_path)?;
     let package_dir = manifest_path
         .parent()
@@ -186,7 +191,11 @@ pub fn prepare(manifest_path: &Path, workspace_path: &Path, output: &Path) -> Re
         !package_dir.starts_with(&output) && output != root,
         "output must be a separate build directory"
     );
-    crate::host::stage_package(package_dir, &output)?;
+    ensure!(
+        !target_dir.is_some_and(|target| target.starts_with(&output)),
+        "staging output must not contain the Cargo target directory"
+    );
+    crate::host::stage_package(package_dir, &output, target_dir)?;
     fs::write(output.join("Cargo.toml"), toml::to_string(&manifest)?)?;
     if root.join("Cargo.lock").is_file() {
         fs::copy(root.join("Cargo.lock"), output.join("Cargo.lock"))?;

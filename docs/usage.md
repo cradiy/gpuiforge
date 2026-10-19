@@ -95,6 +95,26 @@ directory on every build, removing stale snapshot entries. Source symlinks
 are rejected on Windows. Linux and macOS packaging uses source symlinks.
 Generated project paths and source paths may contain spaces.
 
+Set `platforms.android.staging-root` to choose the temporary Rust source root.
+It accepts absolute paths and paths relative to `gpuiforge.json`; a value declared
+in a recipe resolves relative to that recipe. Each prepared project is placed in
+`<staging-root>/<native-library>/<ABI>`. Use a separate staging root for each
+application. Omission keeps `<Cargo target directory>/android`.
+Compiled libraries and Cargo caches remain in the Cargo target directory.
+Source staging excludes that directory, including when `CARGO_TARGET_DIR` uses
+a custom directory inside the application. The staging output must not contain
+the application's source root or Cargo target directory.
+
+Managed builds synchronize this setting into the bundled Gradle project.
+`build` and Android `run` also pass it as `GPUIFORGE_STAGING_ROOT` to configured
+build steps, including manually maintained projects. The native build helper
+accepts `--staging-root`, which takes precedence over that environment variable.
+The bundled Gradle project supports `-PgpuiStagingRoot=PATH`; otherwise it uses
+`GPUIFORGE_STAGING_ROOT`, then its generated default. Direct Gradle overrides
+and native-helper relative paths resolve from the Rust application directory.
+Custom templates can use `{{staging_root}}`, an absolute configured path or an
+empty string when unset, and forward it to the native build helper.
+
 Run `gpuiforge sync android` to update a managed Android project. Custom build
 steps and recipes must use tools available on the build host.
 
@@ -331,6 +351,7 @@ Platform fields:
 | `management` | `managed` (default) or `manual` |
 | `template` | Directory of project files |
 | `project-dir` | Output directory, relative to the application; defaults to `target/gpuiforge/<platform>` |
+| `staging-root` | Android Rust source staging root; defaults to `<Cargo target directory>/android` |
 | `variables` | String template values |
 | `paths` | Paths exposed to templates and commands |
 | `copies` | Array of `{ from, to }` copies, including binary files |

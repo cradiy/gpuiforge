@@ -261,6 +261,11 @@
           "default": "auto",
           "description": "Android signing policy: auto, debug, configured or unsigned. Auto uses the development key for debug; release uses the signing object when present, otherwise remains unsigned. Debug also signs release builds with Android's development key without requiring password variables. Configured requires signing credentials and never falls back. --signing overrides this field. Unsigned APKs cannot be installed by run."
         },
+        "staging-root": {
+          "description": "Android Rust source staging root. Relative paths resolve from the declaring configuration or recipe. Defaults to <Cargo target directory>/android. Prepared projects live under <staging-root>/<native library>/<ABI>. Use a separate root for each application. Does not move compiled artifacts.",
+          "pattern": "\\S",
+          "type": "string"
+        },
         "template": {
           "description": "Custom native project template directory. Relative paths resolve from the JSON file declaring this field. Files ending in .tmpl expand {{variables}} and lose that suffix; other files are copied verbatim. Symlinks are rejected. Omit together with recipe to use bundled Android templates.",
           "type": "string"

@@ -104,6 +104,8 @@ enum Action {
         profile: String,
         #[arg(long, default_value = "26")]
         min_sdk: u32,
+        #[arg(long)]
+        staging_root: Option<PathBuf>,
     },
     #[command(hide = true)]
     Gradle {
@@ -145,9 +147,18 @@ fn run(cli: Cli) -> Result<()> {
         abi,
         profile,
         min_sdk,
+        staging_root,
     } = cli.command
     {
-        return native_build::build(&manifest_path, &output, &library, &abi, &profile, min_sdk);
+        return native_build::build(
+            &manifest_path,
+            &output,
+            &library,
+            &abi,
+            &profile,
+            min_sdk,
+            staging_root.as_deref(),
+        );
     }
     if matches!(cli.command, Action::Devices) {
         return devices::print();
@@ -158,7 +169,7 @@ fn run(cli: Cli) -> Result<()> {
         output,
     } = cli.command
     {
-        return android::prepare(&manifest_path, &workspace, &output);
+        return android::prepare(&manifest_path, &workspace, &output, None);
     }
     if let Action::Init {
         name,

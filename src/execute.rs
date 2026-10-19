@@ -139,6 +139,12 @@ pub fn build(
             selection.signing.name().into(),
         );
         signing_env.insert("GPUIFORGE_SIGNING_ENABLED".into(), "0".into());
+        if let Some(root) = &platform.staging_root {
+            signing_env.insert(
+                "GPUIFORGE_STAGING_ROOT".into(),
+                root.clone().into_os_string(),
+            );
+        }
         if selection.signing == SigningMode::Configured {
             let signing = platform
                 .signing
