@@ -29,7 +29,7 @@ internal class TextEditMenu(
         { update(current()) })
 
     fun tapped(input: TextInputState?) {
-        if (input?.hit != true || input.anchor != input.head) return
+        if (input?.hit != true || !input.editable || input.anchor != input.head) return
         state = input
         handles.update(input)
     }
@@ -108,15 +108,15 @@ internal class TextEditMenu(
         menu.clear()
         fun item(id: Int, label: Int) { menu.add(0, id, Menu.NONE, label).setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM) }
         item(android.R.id.selectAll, android.R.string.selectAll)
-        if (!input.sensitive && input.text != null && input.anchor != input.head) {
-            item(android.R.id.cut, android.R.string.cut)
+        if (!input.sensitive && (input.text != null || !input.editable) && input.anchor != input.head) {
+            if (input.editable) item(android.R.id.cut, android.R.string.cut)
             item(android.R.id.copy, android.R.string.copy)
         }
         val clipboard = view.context.getSystemService(ClipboardManager::class.java)
-        if (clipboard.primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true) {
+        if (input.editable && clipboard.primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true) {
             item(android.R.id.paste, android.R.string.paste)
         }
-        if (view.autofillHost.canRequest()) {
+        if (input.editable && view.autofillHost.canRequest()) {
             item(android.R.id.autofill, if (Build.VERSION.SDK_INT >= 27) android.R.string.autofill else R.string.gpui_autofill)
         }
         return true

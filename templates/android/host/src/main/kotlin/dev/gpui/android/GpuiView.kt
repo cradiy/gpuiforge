@@ -442,6 +442,7 @@ class GpuiView(context: Context, private val session: GpuiSession) :
 
     internal fun performTextAction(epoch: Long, id: Int): Boolean {
         val current = session.inputState()?.takeIf { it.epoch == epoch } ?: return false
+        if (!current.editable && id != android.R.id.copy && id != android.R.id.selectAll) return false
         if (id == android.R.id.autofill) return autofillHost.request()
         if (current.sensitive && (id == android.R.id.copy || id == android.R.id.cut)) return false
         val key = when (id) {
@@ -480,13 +481,13 @@ class GpuiView(context: Context, private val session: GpuiSession) :
             closeInput()
             inputState = next
             inputManager().restartInput(this)
-            if (next == null) inputManager().hideSoftInputFromWindow(windowToken, 0)
+            if (next?.editable != true) inputManager().hideSoftInputFromWindow(windowToken, 0)
         } else {
             // Batches defer updates within one editor, never a change of editor.
             if (inputConnections.any { it.batching() }) return false
             inputState = next
         }
-        if (next != null) {
+        if (next?.editable == true) {
             inputManager().updateSelection(this, next.anchor, next.head, next.composingStart, next.composingEnd)
             for (connection in inputConnections.toList()) connection.updateExtracted(next)
             if (show && (!requireHit || next.hit)) inputManager().showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
@@ -494,14 +495,14 @@ class GpuiView(context: Context, private val session: GpuiSession) :
         return true
     }
 
-    override fun onCheckIsTextEditor() = inputState != null
+    override fun onCheckIsTextEditor() = inputState?.editable == true
 
     override fun onCreateInputConnection(info: EditorInfo): InputConnection? {
         inputDiagnostic { "onCreateInputConnection epoch=${inputState?.epoch} surface=$surfaceReady" }
         if (inputState == null || !surfaceReady) return null
         val state = session.inputState()
         inputState = state
-        if (state == null) return null
+        if (state?.editable != true) return null
         info.inputType = state.inputType
         info.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
             state.action or (if (state.action == EditorInfo.IME_ACTION_NONE) EditorInfo.IME_FLAG_NO_ENTER_ACTION else 0)

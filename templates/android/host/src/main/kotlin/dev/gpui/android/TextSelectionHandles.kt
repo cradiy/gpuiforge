@@ -27,6 +27,7 @@ internal class TextSelectionHandles(
     fun needsFrame() = moving != null
 
     fun update(input: TextInputState) {
+        if (!input.editable && input.anchor == input.head) { close(); return }
         if (!view.isAttachedToWindow || !view.hasWindowFocus()) { close(); return }
         if (input.anchor != input.head) anchor.show(input, input.anchorBounds)
         else anchor.hide()
