@@ -202,7 +202,8 @@ fn sync_prunes_disabled_modules_and_icons() {
         "sharing",
         "notifications",
         "data-sync",
-        "background-media"
+        "background-media",
+        "audio-routing"
       ],
       "cleartext-traffic": true,
       "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"],
@@ -296,6 +297,12 @@ fn sync_prunes_disabled_modules_and_icons() {
     assert!(host.join("DataSyncService.kt").exists());
     assert!(host.join("MediaPlaybackService.kt").exists());
     assert!(host.join("MediaNotification.kt").exists());
+    assert!(host.join("AudioRouteMonitor.kt").exists());
+    assert!(
+        fs::read_to_string(host.join("GpuiSession.kt"))
+            .unwrap()
+            .contains("AudioRouteMonitor(requireContext()")
+    );
     assert!(
         fs::read_to_string(output.join("host/src/main/AndroidManifest.xml"))
             .unwrap()
@@ -357,6 +364,7 @@ fn sync_prunes_disabled_modules_and_icons() {
         "DataSyncService.kt",
         "MediaPlaybackService.kt",
         "MediaNotification.kt",
+        "AudioRouteMonitor.kt",
     ] {
         assert!(!host.join(file).exists());
     }
@@ -383,6 +391,11 @@ fn sync_prunes_disabled_modules_and_icons() {
     assert!(!output.join("app/network-security-config.xml").exists());
     assert!(!output.join("app/network-security.gradle.kts").exists());
     assert!(host.join("ClipboardSnapshot.kt").exists());
+    assert!(
+        !fs::read_to_string(host.join("GpuiSession.kt"))
+            .unwrap()
+            .contains("AudioRouteMonitor")
+    );
     assert!(
         !output
             .join("app/src/main/res/xml/network_security_config.xml")

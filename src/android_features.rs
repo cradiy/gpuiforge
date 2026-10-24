@@ -25,6 +25,7 @@ pub fn included(path: &str, platform: &Platform) -> bool {
         | "MediaTracks.kt"
         | "SystemMediaControls.kt"
         | "PictureInPictureHost.kt" => Media,
+        "AudioRouteMonitor.kt" => AudioRouting,
         "NotificationStore.kt" => Notifications,
         "MediaNotification.kt" => MediaNotifications,
         "DataSyncService.kt" => DataSync,

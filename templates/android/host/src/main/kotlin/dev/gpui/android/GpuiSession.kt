@@ -175,6 +175,44 @@ class GpuiSession : AutoCloseable {
         }, this, SystemClock.uptimeMillis())
     }
 
+// gpuiforge:if audio-routing
+    private var audioRoutes: AudioRouteMonitor? = null
+    private fun outputs(): AudioRouteMonitor {
+        checkThread()
+        check(!closed)
+        return audioRoutes ?: AudioRouteMonitor(requireContext(), handler) { token, json, error ->
+            if (!closed && id != 0L) nativeAudioOutputs(id, token, json, error)
+        }.also { audioRoutes = it }
+    }
+
+    private fun audioOutputAuthorizationRequired(): Boolean = AudioRouteMonitor.authorizationRequired(requireContext())
+
+    private fun audioOutputOperation(operation: Int, token: Long, route: String) {
+        checkThread()
+        check(!closed)
+        when (operation) {
+            0 -> outputs().subscribe(token)
+            1 -> audioRoutes?.unsubscribe(token)
+            2 -> outputs().select(route)
+            3 -> handler.postAtTime({
+                if (!closed && id != 0L) {
+                    val error = try {
+                        check(active()) { "Output settings require an active GpuiView" }
+                        AudioRouteMonitor.openSettings(requireContext())
+                        null
+                    } catch (error: Exception) { error.message ?: "Could not open audio output settings" }
+                    nativeSettingsResult(id, token, error)
+                }
+            }, this, SystemClock.uptimeMillis())
+            4 -> audioRoutes?.refresh()
+            else -> error("Unknown audio output operation")
+        }
+    }
+// gpuiforge:else
+    private fun audioOutputAuthorizationRequired(): Boolean = error("Enable 'audio-routing' in platforms.android.features and run gpuiforge sync")
+    private fun audioOutputOperation(operation: Int, token: Long, route: String) { error("Enable 'audio-routing' in platforms.android.features and run gpuiforge sync") }
+// gpuiforge:endif
+
     private fun networks(): NetworkMonitor {
         checkThread()
         check(!closed) { "GpuiSession is closed" }
@@ -904,6 +942,10 @@ class GpuiSession : AutoCloseable {
 
     /** Releases the Rust application. Do not close during a retained Activity recreation. */
     override fun close() {
+// gpuiforge:if audio-routing
+        audioRoutes?.close()
+        audioRoutes = null
+// gpuiforge:endif
 // gpuiforge:if data-sync
         dataSync?.close()
         dataSync = null
@@ -1030,6 +1072,7 @@ class GpuiSession : AutoCloseable {
         @JvmStatic private external fun nativeRunTask(id: Long, token: Long)
         @JvmStatic private external fun nativeClose(id: Long)
         @JvmStatic private external fun nativePermissionResult(id: Long, token: Long, status: Int)
+        @JvmStatic private external fun nativeAudioOutputs(id: Long, token: Long, json: String, error: String?)
         @JvmStatic private external fun nativeNetworkChanged(id: Long, token: Long, status: Int)
         @JvmStatic private external fun nativeSettingsResult(id: Long, token: Long, error: String?)
         @JvmStatic private external fun nativeBackgroundEvent(id: Long, token: String, event: String, error: String)

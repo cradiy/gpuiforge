@@ -136,6 +136,8 @@ pub enum AndroidFeature {
     Credentials,
     /// Media playback, frame decoding and picture-in-picture windows, including the Media3 dependency. System playback notifications are selected separately with media-notifications.
     Media,
+    /// System media route observation and selection, independent of a player. Declare BLUETOOTH_CONNECT and BLUETOOTH_SCAN and request authorization before showing Bluetooth outputs.
+    AudioRouting,
     /// General system notifications, action buttons and inline replies. Declare POST_NOTIFICATIONS and request runtime authorization when required by Android.
     Notifications,
     /// Android system media session and playback notification controls. Independent of media and notifications, so an application may connect its own player. Does not create a foreground service or keep background work alive.

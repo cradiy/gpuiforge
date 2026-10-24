@@ -350,6 +350,7 @@ Optional modules are:
 | `credentials` | Android credential storage |
 | `media` | Media playback, decoding and picture-in-picture windows, including the Media3 dependency |
 | `notifications` | General notifications, actions and inline replies |
+| `audio-routing` | System audio output observation, selection and device management; independent of `media`. Declare `BLUETOOTH_CONNECT` and `BLUETOOTH_SCAN` and use `App::authorize_audio_outputs` after a user action. |
 | `media-notifications` | System media session and playback notification; independent of `media` |
 | `background-media` | Explicit foreground playback leases; includes `media-notifications`; requires `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MEDIA_PLAYBACK` in `permissions` |
 | `data-sync` | Session-bound foreground execution for application-owned transfers; requires `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_DATA_SYNC` in `permissions` |

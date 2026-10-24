@@ -42,6 +42,11 @@
           "type": "string"
         },
         {
+          "const": "audio-routing",
+          "description": "System media route observation and selection, independent of a player. Declare BLUETOOTH_CONNECT and BLUETOOTH_SCAN and request authorization before showing Bluetooth outputs.",
+          "type": "string"
+        },
+        {
           "const": "notifications",
           "description": "General system notifications, action buttons and inline replies. Declare POST_NOTIFICATIONS and request runtime authorization when required by Android.",
           "type": "string"
